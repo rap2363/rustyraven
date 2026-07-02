@@ -1,6 +1,6 @@
 use crate::cpu::Cpu;
 
-enum AddressingMode {
+pub enum AddressingMode {
     Immediate(u8),          // (data)
     Absolute(u16),          // *($HHLL)
     ZeroPage(u8),           // *($00LL)
@@ -15,7 +15,7 @@ enum AddressingMode {
 }
 
 #[derive(Debug, PartialEq)]
-enum PageBoundaryResult {
+pub enum PageBoundaryResult {
     Irrelevant,
     SamePage,
     PageBoundaryCrossed,
@@ -23,7 +23,7 @@ enum PageBoundaryResult {
 
 impl AddressingMode {
     // Each addressing mode ultimately returns a byte.
-    fn into_data(self, cpu: &Cpu) -> (u8, PageBoundaryResult) {
+    pub fn into_data(self, cpu: &Cpu) -> (u8, PageBoundaryResult) {
         match self {
             Self::Immediate(d) => (d, PageBoundaryResult::Irrelevant),
             Self::Absolute(address) => (cpu.memory.get_byte(address), PageBoundaryResult::Irrelevant),
@@ -59,8 +59,14 @@ impl AddressingMode {
                 (cpu.memory.get_byte(ptr_address), PageBoundaryResult::Irrelevant)
             },
             Self::IndirectZeroPageY(address) => {
-                let ptr_address = cpu.memory.get_two_bytes_zero_page(address).wrapping_add(cpu.y as u16);
-                (cpu.memory.get_byte(ptr_address), PageBoundaryResult::Irrelevant)
+                let ptr_address = cpu.memory.get_two_bytes_zero_page(address);
+                let pbr = if (ptr_address as u8).overflowing_add(cpu.y).1 {
+                    PageBoundaryResult::PageBoundaryCrossed
+                } else {
+                    PageBoundaryResult::SamePage
+                };
+                let ptr_address = ptr_address.wrapping_add(cpu.y as u16);
+                (cpu.memory.get_byte(ptr_address), pbr)
             },
             Self::Relative(offset) => {
                 // Check if PC + offset would result in an overflow
@@ -158,11 +164,11 @@ mod tests {
     #[test]
     fn test_indirect_zero_page_y() {
         let mut cpu = Cpu::initialize();
-        cpu.y = 0x0F;
+        cpu.y = 0xCF;
         cpu.memory.set_byte(0x00FF, 0x40);
         cpu.memory.set_byte(0x0000, 0x43);
-        cpu.memory.set_byte(0x434F, 0x42);
-        assert_eq!((0x42, PageBoundaryResult::Irrelevant), AddressingMode::IndirectZeroPageY(0xFF).into_data(&cpu));
+        cpu.memory.set_byte(0x440F, 0x42);
+        assert_eq!((0x42, PageBoundaryResult::PageBoundaryCrossed), AddressingMode::IndirectZeroPageY(0xFF).into_data(&cpu));
     }
 
 

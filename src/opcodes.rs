@@ -1,24 +1,14 @@
 use crate::processor_status::ProcessorStatus;
+use crate::cpu::Cpu;
 
 #[derive(Debug)]
-enum Opcode {
+pub enum Opcode {
     ADC,
 }
 
-#[derive(Debug)]
-struct OpcodeResult {
-    num_cycles: usize,
-    status: ProcessorStatus,
-}
-
 impl Opcode {
-    fn execute(&self, processor_status: ProcessorStatus) -> OpcodeResult {
-        match self {
-            Opcode::ADC => Self::adc_execute(0, 0, processor_status),
-        }
-    }
-
-    fn adc_execute(a: u8, m: u8, status: ProcessorStatus) -> OpcodeResult {
+    // Returns what the new value of a should be along with the updated ProcessorStatus
+    fn adc_execute(a: u8, m: u8, status: ProcessorStatus) -> (u8, ProcessorStatus) {
         let (a, carry) = a.carrying_add(m, status.is_carry());
         let s_a = a as i8;
         let s_m = m as i8;
@@ -41,10 +31,7 @@ impl Opcode {
             new_status.set_overflow();
         }
 
-        OpcodeResult {
-            num_cycles: 0,
-            status: new_status,
-        }
+        (a, new_status)
     }
 }
 
@@ -55,8 +42,8 @@ mod tests {
     #[test]
     fn test_add_with_carry() {
         let x = Opcode::ADC;
-        let result = x.execute(ProcessorStatus::initialize());
-        println!("{:?}", result);
+        // let result = x.execute(ProcessorStatus::initialize());
+        // println!("{:?}", result);
         assert_eq!(1, 2);
     }
 }
