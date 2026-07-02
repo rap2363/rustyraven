@@ -22,13 +22,13 @@ impl<const N: usize> Segment<N> {
     }
 }
 
-pub struct Memory {
+pub struct CpuMemory {
     ram: Segment<0x0800>,
     lower_io: Segment<0x0008>,
     upper_memory: Segment<0xC000>,
 }
 
-impl Memory {
+impl CpuMemory {
     pub fn initialize() -> Self {
         Self {
             ram: Segment::<0x0800>::initialize(),
@@ -69,6 +69,32 @@ impl Memory {
             self.upper_memory.get_byte(upper_memory_address as usize)
         }
     }
+
+    pub fn get_byte_zero_page(&self, address: u8) -> u8 {
+        // This is obviously within the RAM memory segment.
+        self.ram.get_byte(address as usize)
+    }
+
+    // Returns two bytes assuming little endian. So the bytes
+    // come back $HHLL even though they're *read* as LLHH.
+    //
+    // Note this wraps around the entire memory space!
+    pub fn get_two_bytes(&self, address: u16) -> u16 {
+        u16::from_le_bytes([
+            self.get_byte(address), 
+            self.get_byte(address.wrapping_add(1)),
+        ])
+    }
+
+    // Returns two bytes assuming little endian. So the bytes
+    // come back $HHLL even though they're *read* as LLHH. Add
+    // wraps around the Zero Page.
+    pub fn get_two_bytes_zero_page(&self, address: u8) -> u16 {
+        u16::from_le_bytes([
+            self.get_byte(address as u16),
+            self.get_byte(address.wrapping_add(1) as u16), 
+        ])
+    }
 }
 
 
@@ -86,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_memory_mirroring() {
-        let mut cpu_memory = Memory::initialize();
+        let mut cpu_memory = CpuMemory::initialize();
         cpu_memory.set_byte(0x0803, 42);
         cpu_memory.set_byte(0x2009, 43);
         // Assert that the write can be read in a "mirrored" way throughout RAM.
