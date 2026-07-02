@@ -54,6 +54,12 @@ impl CpuMemory {
         }
     }
 
+    pub fn set_bytes(&mut self, address: u16, values: &[u8]) {
+        for i in 0..values.len() {
+            self.set_byte(address + (i as u16), values[i]);
+        }
+    }
+
     pub fn get_byte(&self, address: u16) -> u8 {
         if address < 0x2000 {
             // RAM
