@@ -102,13 +102,13 @@ mod tests {
 
     #[test]
     fn test_processor_statuses() {
-        let ps = ProcessorStatus::initialize().set_interrupt().set_break().set_negative();
+        let ps = ProcessorStatus::initialize().set_interrupt().set_break().set_negative().set_carry();
 
         assert!(ps.is_break());
         assert!(ps.is_interrupt());
         assert!(ps.is_negative());
+        assert!(ps.is_carry());
 
-        assert!(!ps.is_carry());
         assert!(!ps.is_zero());
         assert!(!ps.is_overflow());
     }
