@@ -17,6 +17,7 @@ enum Opcode {
     BMI,
     BNE,
     BPL,
+    BRK,
 }
 
 pub struct Cpu {
@@ -48,7 +49,7 @@ impl Cpu {
             memory: CpuMemory::initialize(),
             processor_status: ProcessorStatus::initialize(),
             pc: 0,
-            sp: 0,
+            sp: 0xFF,
             a: 0,
             x: 0,
             y: 0,
@@ -58,6 +59,17 @@ impl Cpu {
 
     fn increment_pc(&mut self) {
         self.pc = self.pc.wrapping_add(1);
+    }
+
+    fn push_stack(&mut self, data: u8) {
+        self.memory.set_byte(0x1000 + (self.sp as u16), data);
+        self.sp = self.sp.wrapping_sub(1);
+    }
+
+    fn pop_stack(&mut self) -> u8 {
+        let data = self.memory.get_byte(0x1000 + (self.sp as u16));
+        self.sp = self.sp.wrapping_add(1);
+        data
     }
 
     // Gets a byte and increments the program counter.
@@ -162,6 +174,8 @@ impl Cpu {
             0xD0 => (BNE, self.relative(), 2),
             
             0x10 => (BPL, self.relative(), 2),
+
+            0x00 => (BRK, self.implied(0x00), 7),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -350,6 +364,19 @@ impl Cpu {
         }
     }
 
+    // Forces a software interrupt. We do the following:
+    // 1. Set the interrupt flag,
+    // 2. Push the PC+2 to the stack (return address is 2 bytes after the current PC!)
+    // 3. Push the status register to the stack
+    fn brk(&mut self) {
+        self.processor_status = self.processor_status.set_interrupt();
+        let pc_plus_two = self.pc.wrapping_add(2);
+        // Little Endian, push the low bits, then the high ones.
+        self.push_stack(pc_plus_two as u8);
+        self.push_stack((pc_plus_two >> 4) as u8);
+        self.push_stack(self.processor_status.into());
+    }
+
     // A bit of a hack to deal with the variability of branch cycles.
     fn calculate_branch_cycles(num_cycles: &mut usize, branch: bool, pbc: bool) {
         // Cycle Calculation
@@ -391,6 +418,8 @@ impl Cpu {
             Opcode::BMI => Self::calculate_branch_cycles(&mut num_cycles, self.bmi(data), pbc),
             Opcode::BNE => Self::calculate_branch_cycles(&mut num_cycles, self.bne(data), pbc),
             Opcode::BPL => Self::calculate_branch_cycles(&mut num_cycles, self.bpl(data), pbc),
+            Opcode::BRK => self.brk(),
+
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -493,5 +522,21 @@ mod tests {
         assert!(cpu.processor_status.is_negative());
         assert!(cpu.processor_status.is_zero());
         assert_eq!(3, cpu.cycle_count);
+    }
+
+    #[test]
+    fn test_break() {
+        let mut cpu = Cpu::initialize();
+        cpu.processor_status = ProcessorStatus::from(0x42);
+        cpu.fetch_instruction_and_execute();
+
+        // Now we should have pushed our PC and the processor status to the stack.
+        assert_eq!(0x01, cpu.pc);
+        assert!(cpu.processor_status.is_interrupt());
+        assert_eq!(7, cpu.cycle_count);
+        assert_eq!(0xFC, cpu.sp);
+        assert_eq!(0x03, cpu.memory.get_byte(0x10FF));
+        assert_eq!(0x00, cpu.memory.get_byte(0x10FE));
+        assert_eq!(ProcessorStatus::from(0x42).set_interrupt().into(), cpu.memory.get_byte(0x10FD));
     }
 }

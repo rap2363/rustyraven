@@ -8,7 +8,11 @@ impl ProcessorStatus {
         Self(0x00)
     }
 
-    fn from(flags: u8) -> Self {
+    pub fn into(self) -> u8 {
+        self.0
+    }
+
+    pub fn from(flags: u8) -> Self {
         Self(flags)
     }
 
