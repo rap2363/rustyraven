@@ -1,7 +1,7 @@
 use core::num;
 use std::net::Shutdown::Write;
 
-use crate::addressing_modes::{AddressingMode, AddressingModeData, PageBoundaryResult::PageBoundaryCrossed, WriteLocation};
+use crate::addressing_modes::{AddressingMode, AddressingModeData, PageBoundaryResult::PageBoundaryCrossed};
 use crate::memory::CpuMemory;
 use crate::processor_status::ProcessorStatus;
 
@@ -43,6 +43,11 @@ pub struct FetchInstructionResult {
     cycles: usize,
 }
 
+enum WriteLocation {
+    Accumulator,
+    Memory(u16),
+}
+
 impl FetchInstructionResult {
     fn new(opcode: Opcode, addressing_mode: AddressingMode, cycles: usize) -> Self {
         Self { opcode, addressing_mode, cycles }
@@ -68,19 +73,18 @@ impl Cpu {
     }
 
     fn push_stack(&mut self, data: u8) {
-        self.memory.set_byte(0x1000 + (self.sp as u16), data);
+        self.memory.write_byte_to_stack(self.sp, data);
         self.sp = self.sp.wrapping_sub(1);
     }
 
     fn pop_stack(&mut self) -> u8 {
-        let data = self.memory.get_byte(0x1000 + (self.sp as u16));
         self.sp = self.sp.wrapping_add(1);
-        data
+        self.memory.read_byte_from_stack(self.sp)
     }
 
     // Gets a byte and increments the program counter.
     fn fetch_next_byte(&mut self) -> u8 {
-        let data = self.memory.get_byte(self.pc);
+        let data = self.memory.read_byte(self.pc);
         self.increment_pc();
         data
     }
@@ -88,15 +92,15 @@ impl Cpu {
     // Fetches two byte $LL and $HH and increments the program counter twice
     // returning the u16 as $HHLL
     fn fetch_next_two_bytes(&mut self) -> u16 {
-        let two_bytes = self.memory.get_two_bytes(self.pc);
+        let two_bytes = self.memory.read_two_bytes(self.pc);
         self.increment_pc();
         self.increment_pc();
         two_bytes
     }
 
-    fn implied(&mut self, data: u8) -> AddressingMode {
+    fn implied(&mut self) -> AddressingMode {
         // Note we do not increment the PC!
-        AddressingMode::Implied(data)
+        AddressingMode::Implied
     }
 
     fn immediate(&mut self) -> AddressingMode {
@@ -160,7 +164,7 @@ impl Cpu {
             0x21 => (AND, self.indirect_zero_page_x(), 6),
             0x31 => (AND, self.indirect_zero_page_y(), 5),
 
-            0x0A => (ASL, self.implied(self.a), 2),
+            0x0A => (ASL, self.implied(), 2),
             0x06 => (ASL, self.zero_page(), 5),
             0x16 => (ASL, self.zero_page_x(), 6),
             0x0E => (ASL, self.absolute(), 6),
@@ -181,16 +185,16 @@ impl Cpu {
             
             0x10 => (BPL, self.relative(), 2),
 
-            0x00 => (BRK, self.implied(0x00), 7),
+            0x00 => (BRK, self.implied(), 7),
 
             0x50 => (BVC, self.relative(), 2),
 
             0x70 => (BVS, self.relative(), 2),
 
-            0x18 => (CLC, self.implied(0x00), 2),
-            0xD8 => (CLD, self.implied(0x00), 2),
-            0x58 => (CLI, self.implied(0x00), 2),
-            0xB8 => (CLV, self.implied(0x00), 2),
+            0x18 => (CLC, self.implied(), 2),
+            0xD8 => (CLD, self.implied(), 2),
+            0x58 => (CLI, self.implied(), 2),
+            0xB8 => (CLV, self.implied(), 2),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -280,7 +284,7 @@ impl Cpu {
                 self.a = result
             },
             WriteLocation::Memory(address) => {
-                self.memory.set_byte(address, result);
+                self.memory.write_byte(address, result);
             }
         }
     }
@@ -446,7 +450,6 @@ impl Cpu {
         self.processor_status = self.processor_status.clear_overflow();
     }
 
-
     // A bit of a hack to deal with the variability of branch cycles.
     fn calculate_branch_cycles(num_cycles: &mut usize, branch: bool, pbc: bool) {
         // Cycle Calculation
@@ -474,10 +477,10 @@ impl Cpu {
             Opcode::AND => self.and(data),
             Opcode::ASL => {
                 // We write to memory if we returned a specific address.
-                let wl = if let Some(address) = address {
-                    WriteLocation::Memory(address)
+                let (data, wl) = if let Some(address) = address {
+                    (data, WriteLocation::Memory(address))
                 } else {
-                    WriteLocation::Accumulator
+                    (self.a, WriteLocation::Accumulator)
                 };
                 self.asl(data, wl);
             },
@@ -511,7 +514,7 @@ mod tests {
         let mut cpu = Cpu::initialize();
         cpu.a = 0x03F;
         cpu.processor_status = ProcessorStatus::initialize().set_carry();
-        cpu.memory.set_bytes(0x00, &[0x69, 0x02]);
+        cpu.memory.write_bytes(0x00, &[0x69, 0x02]);
         cpu.fetch_instruction_and_execute();
 
         assert_eq!(0x42, cpu.a);
@@ -526,7 +529,7 @@ mod tests {
     fn test_and() {
         let mut cpu = Cpu::initialize();
         cpu.a = 0xFF;
-        cpu.memory.set_bytes(0x00, &[0x29, 0x42]);
+        cpu.memory.write_bytes(0x00, &[0x29, 0x42]);
         cpu.fetch_instruction_and_execute();
 
         assert_eq!(0x42, cpu.a);
@@ -539,8 +542,8 @@ mod tests {
     fn test_asl() {
         let mut cpu = Cpu::initialize();
         cpu.a = 0x80;
-        cpu.memory.set_bytes(0x00, &[0x0A, 0x06, 0x42]);
-        cpu.memory.set_byte(0x0042, 0x40);
+        cpu.memory.write_bytes(0x00, &[0x0A, 0x06, 0x42]);
+        cpu.memory.write_byte(0x0042, 0x40);
 
         // One instruction should just left shift A and set the carry.
         cpu.fetch_instruction_and_execute();
@@ -556,7 +559,7 @@ mod tests {
 
         assert_eq!(0x03, cpu.pc);
         assert_eq!(0x00, cpu.a);
-        assert_eq!(0x80, cpu.memory.get_byte(0x0042));
+        assert_eq!(0x80, cpu.memory.read_byte(0x0042));
         assert!(cpu.processor_status.is_negative());
         assert!(!cpu.processor_status.is_zero());
         assert!(!cpu.processor_status.is_carry());
@@ -565,8 +568,8 @@ mod tests {
     #[test]
     fn test_bcc_and_bcs() {
         let mut cpu = Cpu::initialize();
-        cpu.memory.set_bytes(0x00, &[0x90, 0x40]);
-        cpu.memory.set_bytes(0x0042, &[0xB0, 0xFF, 0xB0, 0xFF]);
+        cpu.memory.write_bytes(0x00, &[0x90, 0x40]);
+        cpu.memory.write_bytes(0x0042, &[0xB0, 0xFF, 0xB0, 0xFF]);
 
         // One instruction should just branch the CPU to address 0x0042.
         // Cycles should be 3 because we branched.
@@ -589,8 +592,8 @@ mod tests {
     fn test_bit() {
         let mut cpu = Cpu::initialize();
         cpu.a = 0x0F;
-        cpu.memory.set_bytes(0x00, &[0x24, 0x42]);
-        cpu.memory.set_byte(0x0042, 0xF0);
+        cpu.memory.write_bytes(0x00, &[0x24, 0x42]);
+        cpu.memory.write_byte(0x0042, 0xF0);
 
         cpu.fetch_instruction_and_execute();
         assert!(cpu.processor_status.is_overflow());
@@ -610,8 +613,8 @@ mod tests {
         assert!(cpu.processor_status.is_break());
         assert_eq!(7, cpu.cycle_count);
         assert_eq!(0xFC, cpu.sp);
-        assert_eq!(0x03, cpu.memory.get_byte(0x10FF));
-        assert_eq!(0x00, cpu.memory.get_byte(0x10FE));
-        assert_eq!(0x52, cpu.memory.get_byte(0x10FD));
+        assert_eq!(0x03, cpu.memory.read_byte(0x10FF));
+        assert_eq!(0x00, cpu.memory.read_byte(0x10FE));
+        assert_eq!(0x52, cpu.memory.read_byte(0x10FD));
     }
 }
