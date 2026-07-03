@@ -1,3 +1,4 @@
+use core::num;
 use std::net::Shutdown::Write;
 
 use crate::addressing_modes::{AddressingMode, AddressingModeData, PageBoundaryResult::PageBoundaryCrossed, WriteLocation};
@@ -9,6 +10,9 @@ enum Opcode {
     ADC,
     AND,
     ASL,
+    BCC,
+    BCS,
+    BEQ,
 }
 
 pub struct Cpu {
@@ -105,6 +109,10 @@ impl Cpu {
         AddressingMode::IndexedZeroPageY(self.fetch_next_byte())
     }
 
+    fn relative(&mut self) -> AddressingMode {
+        AddressingMode::Relative(self.fetch_next_byte())
+    }
+
     // An instruction fetch will get the next instruction and increment the PC appropriately according to the instruction length.
     // We match on the opcode below to recieve a "FetchInstructionResult", which provides the appropriate opcode, addressing mode, and
     // number of base cycles for the operation.
@@ -135,6 +143,11 @@ impl Cpu {
             0x16 => (ASL, self.zero_page_x(), 6),
             0x0E => (ASL, self.absolute(), 6),
             0x1E => (ASL, self.absolute_x(), 7),
+
+            0x90 => (BCC, self.relative(), 2),
+            0xB0 => (BCS, self.relative(), 2),
+            0xF0 => (BEQ, self.relative(), 2),
+
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
         FetchInstructionResult::new(opcode, addressing_mode, cycles)
@@ -178,7 +191,7 @@ impl Cpu {
     // Add With Carry
     // A <- A + M + C
     // Affects Flags: N, V, Z, C
-    fn execute_adc(&mut self, m: u8) {
+    fn adc(&mut self, m: u8) {
         let extended_result = self.a as u16 + m as u16 + self.processor_status.carry() as u16;
         let c = extended_result >> 8 & 0x0001 == 0x0001;
 
@@ -196,7 +209,7 @@ impl Cpu {
     // Bitwise AND with Accumulator
     // A <- A & M
     // Affects Flags: N, Z
-    fn execute_and(&mut self, m: u8) {
+    fn and(&mut self, m: u8) {
         let result = self.a & m;
 
         // Flags
@@ -209,7 +222,7 @@ impl Cpu {
     // Arithmetic Shift Left
     // A <- M << 1
     // Affects Flags: N Z C
-    fn execute_asl(&mut self, m: u8, write_location: WriteLocation) {
+    fn asl(&mut self, m: u8, write_location: WriteLocation) {
         let result = m << 1;
 
         // Flags
@@ -228,26 +241,82 @@ impl Cpu {
         }
     }
 
+    // Branch on Carry Clear
+    // branch on C = 0
+    // Affects Flags: (none)
+    // Returns a 1 if we branch or a 0 if we don't (cycle count).
+    fn bcc(&mut self, m: u8) -> bool {
+        if !self.processor_status.is_carry() {
+            self.pc = self.pc.wrapping_add(m as u16);
+            true
+        } else {
+            false
+        }
+    }
+
+    // Branch on Carry Set
+    // branch on C = 1
+    // Affects Flags: (none)
+    // Returns a 1 if we branch or a 0 if we don't (cycle count).
+    fn bcs(&mut self, m: u8) -> bool {
+        if self.processor_status.is_carry() {
+            self.pc = self.pc.wrapping_add(m as u16);
+            true
+        } else {
+            false
+        }
+    }
+
+    // Branch on Zero Flag Set
+    // branch on Z = 1
+    // Affects Flags: (none)
+    // Returns a 1 if we branch or a 0 if we don't (cycle count).
+    fn beq(&mut self, m: u8) -> bool {
+        if self.processor_status.is_zero() {
+            self.pc = self.pc.wrapping_add(m as u16);
+            true
+        } else {
+            false
+        }
+    }
+
+    // A bit of a hack to deal with the variability of branch cycles.
+    fn calculate_branch_cycles(num_cycles: &mut usize, branch: bool, pbc: bool) {
+        // Cycle Calculation
+        // Branch | PBR | Cycles
+        //    F   |  F  | 2
+        //    F   |  T  | 2
+        //    T   |  F  | 3
+        //    T   |  T  | 4
+        *num_cycles = if branch {
+            if pbc { 4 } else { 3 }
+        } else {
+            2
+        }
+    }
+
     pub fn fetch_instruction_and_execute(&mut self) {
         let FetchInstructionResult { opcode, addressing_mode, cycles } = self.fetch_instruction();
         // Now our PC is at the next instruction, so offsets will be measured relative to that.
         let AddressingModeData { data, address, page_boundary_result } = addressing_mode.into_data(self);
-        let num_cycles = cycles + if page_boundary_result == PageBoundaryCrossed { 1 } else { 0 };
-
+        let pbc = page_boundary_result == PageBoundaryCrossed;
+        let mut num_cycles: usize = cycles + if pbc { 1 } else { 0 };
         // Now we can actually *execute* the instruction.
         match opcode {
-            Opcode::ADC => self.execute_adc(data),
-            Opcode::AND => self.execute_and(data),
+            Opcode::ADC => self.adc(data),
+            Opcode::AND => self.and(data),
             Opcode::ASL => {
-                println!("0x{:04X}: 0x{:02X}", address.unwrap_or_default(), data);
                 // We write to memory if we returned a specific address.
                 let wl = if let Some(address) = address {
                     WriteLocation::Memory(address)
                 } else {
                     WriteLocation::Accumulator
                 };
-                self.execute_asl(data, wl);
+                self.asl(data, wl);
             },
+            Opcode::BCC => Self::calculate_branch_cycles(&mut num_cycles, self.bcc(data), pbc),
+            Opcode::BCS => Self::calculate_branch_cycles(&mut num_cycles, self.bcs(data), pbc),
+            Opcode::BEQ => Self::calculate_branch_cycles(&mut num_cycles, self.beq(data), pbc),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -313,5 +382,27 @@ mod tests {
         assert!(cpu.processor_status.is_negative());
         assert!(!cpu.processor_status.is_zero());
         assert!(!cpu.processor_status.is_carry());
+    }
+
+    #[test]
+    fn test_bcc_and_bcs() {
+        let mut cpu = Cpu::initialize();
+        cpu.memory.set_bytes(0x00, &[0x90, 0x40]);
+        cpu.memory.set_bytes(0x0042, &[0xB0, 0xFF, 0xB0, 0xFF]);
+
+        // One instruction should just branch the CPU to address 0x0042.
+        // Cycles should be 3 because we branched.
+        cpu.fetch_instruction_and_execute();
+
+        assert_eq!(0x0042, cpu.pc);
+        assert_eq!(3, cpu.cycle_count);
+        cpu.fetch_instruction_and_execute();
+        cpu.processor_status = cpu.processor_status.set_carry();
+        cpu.fetch_instruction_and_execute();
+
+        assert_eq!(0x0046 + 0x00FF, cpu.pc);
+        assert_eq!(3 + 2 + 4, cpu.cycle_count);
+        // After fetching two more we will have *not* branched once and then branched
+        // after the carry was set.
     }
 }
