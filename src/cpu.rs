@@ -18,6 +18,8 @@ enum Opcode {
     BNE,
     BPL,
     BRK,
+    BVC,
+    BVS,
 }
 
 pub struct Cpu {
@@ -176,6 +178,10 @@ impl Cpu {
             0x10 => (BPL, self.relative(), 2),
 
             0x00 => (BRK, self.implied(0x00), 7),
+
+            0x50 => (BVC, self.relative(), 2),
+
+            0x70 => (BVS, self.relative(), 2),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -377,6 +383,32 @@ impl Cpu {
         self.push_stack(self.processor_status.into());
     }
 
+    // Branch on Overflow Clear
+    // branch on V = 0
+    // Affects Flags: (none)
+    // Returns a bool for whether or not we branch.
+    fn bvc(&mut self, m: u8) -> bool {
+        if !self.processor_status.is_overflow() {
+            self.pc = self.pc.wrapping_add(m as u16);
+            true
+        } else {
+            false
+        }
+    }
+
+    // Branch on Overflow Set
+    // branch on V = 1
+    // Affects Flags: (none)
+    // Returns a bool for whether or not we branch.
+    fn bvs(&mut self, m: u8) -> bool {
+        if self.processor_status.is_overflow() {
+            self.pc = self.pc.wrapping_add(m as u16);
+            true
+        } else {
+            false
+        }
+    }
+
     // A bit of a hack to deal with the variability of branch cycles.
     fn calculate_branch_cycles(num_cycles: &mut usize, branch: bool, pbc: bool) {
         // Cycle Calculation
@@ -419,7 +451,8 @@ impl Cpu {
             Opcode::BNE => Self::calculate_branch_cycles(&mut num_cycles, self.bne(data), pbc),
             Opcode::BPL => Self::calculate_branch_cycles(&mut num_cycles, self.bpl(data), pbc),
             Opcode::BRK => self.brk(),
-
+            Opcode::BVC => Self::calculate_branch_cycles(&mut num_cycles, self.bvc(data), pbc),
+            Opcode::BVS => Self::calculate_branch_cycles(&mut num_cycles, self.bvs(data), pbc),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
