@@ -13,6 +13,7 @@ enum Opcode {
     BCC,
     BCS,
     BEQ,
+    BIT,
 }
 
 pub struct Cpu {
@@ -145,8 +146,13 @@ impl Cpu {
             0x1E => (ASL, self.absolute_x(), 7),
 
             0x90 => (BCC, self.relative(), 2),
+
             0xB0 => (BCS, self.relative(), 2),
+            
             0xF0 => (BEQ, self.relative(), 2),
+
+            0x24 => (BIT, self.zero_page(), 3),
+            0x2C => (BIT, self.absolute(), 4),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -280,6 +286,22 @@ impl Cpu {
         }
     }
 
+    // Bit Test
+    // Sets the zero flag based on the value of A & M.
+    // Also sets N and V based on bits 7 and 6 of M respectively.
+    // Affects Flags: N V Z
+    // Returns a 1 if we branch or a 0 if we don't (cycle count).
+    fn bit(&mut self, m: u8) {
+        self.check_and_set_negative(m);
+        println!("0x{:02X}", m);
+        if m >> 6 & 0x01 == 0x01 {
+            self.processor_status = self.processor_status.set_overflow();
+        } else {
+            self.processor_status = self.processor_status.clear_overflow();
+        }
+        self.check_and_set_zero(self.a & m);
+    }
+
     // A bit of a hack to deal with the variability of branch cycles.
     fn calculate_branch_cycles(num_cycles: &mut usize, branch: bool, pbc: bool) {
         // Cycle Calculation
@@ -317,6 +339,7 @@ impl Cpu {
             Opcode::BCC => Self::calculate_branch_cycles(&mut num_cycles, self.bcc(data), pbc),
             Opcode::BCS => Self::calculate_branch_cycles(&mut num_cycles, self.bcs(data), pbc),
             Opcode::BEQ => Self::calculate_branch_cycles(&mut num_cycles, self.beq(data), pbc),
+            Opcode::BIT => self.bit(data),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -404,5 +427,20 @@ mod tests {
         assert_eq!(3 + 2 + 4, cpu.cycle_count);
         // After fetching two more we will have *not* branched once and then branched
         // after the carry was set.
+    }
+
+
+    #[test]
+    fn test_bit() {
+        let mut cpu = Cpu::initialize();
+        cpu.a = 0x0F;
+        cpu.memory.set_bytes(0x00, &[0x24, 0x42]);
+        cpu.memory.set_byte(0x0042, 0xF0);
+
+        cpu.fetch_instruction_and_execute();
+        assert!(cpu.processor_status.is_overflow());
+        assert!(cpu.processor_status.is_negative());
+        assert!(cpu.processor_status.is_zero());
+        assert_eq!(3, cpu.cycle_count);
     }
 }
