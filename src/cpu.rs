@@ -20,6 +20,10 @@ enum Opcode {
     BRK,
     BVC,
     BVS,
+    CLC,
+    CLD,
+    CLI,
+    CLV,
 }
 
 pub struct Cpu {
@@ -182,6 +186,11 @@ impl Cpu {
             0x50 => (BVC, self.relative(), 2),
 
             0x70 => (BVS, self.relative(), 2),
+
+            0x18 => (CLC, self.implied(0x00), 2),
+            0xD8 => (CLD, self.implied(0x00), 2),
+            0x58 => (CLI, self.implied(0x00), 2),
+            0xB8 => (CLV, self.implied(0x00), 2),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -375,7 +384,7 @@ impl Cpu {
     // 2. Push the PC+2 to the stack (return address is 2 bytes after the current PC!)
     // 3. Push the status register to the stack
     fn brk(&mut self) {
-        self.processor_status = self.processor_status.set_interrupt();
+        self.processor_status = self.processor_status.set_break();
         let pc_plus_two = self.pc.wrapping_add(2);
         // Little Endian, push the low bits, then the high ones.
         self.push_stack(pc_plus_two as u8);
@@ -408,6 +417,35 @@ impl Cpu {
             false
         }
     }
+
+    // Clear carry flag
+    // C = 0
+    // Affects Flags: C
+    fn clc(&mut self) {
+        self.processor_status = self.processor_status.clear_carry();
+    }
+
+    // Clear decimal mode flag
+    // D = 0
+    // Affects Flags: D
+    fn cld(&mut self) {
+        self.processor_status = self.processor_status.clear_decimal();
+    }
+
+    // Clear interrupt flag
+    // I = 0
+    // Affects Flags: I
+    fn cli(&mut self) {
+        self.processor_status = self.processor_status.clear_interrupt();
+    }
+
+    // Clear overflow flag
+    // V = 0
+    // Affects Flags: V
+    fn clv(&mut self) {
+        self.processor_status = self.processor_status.clear_overflow();
+    }
+
 
     // A bit of a hack to deal with the variability of branch cycles.
     fn calculate_branch_cycles(num_cycles: &mut usize, branch: bool, pbc: bool) {
@@ -453,6 +491,10 @@ impl Cpu {
             Opcode::BRK => self.brk(),
             Opcode::BVC => Self::calculate_branch_cycles(&mut num_cycles, self.bvc(data), pbc),
             Opcode::BVS => Self::calculate_branch_cycles(&mut num_cycles, self.bvs(data), pbc),
+            Opcode::CLC => self.clc(),
+            Opcode::CLD => self.cld(),
+            Opcode::CLI => self.cli(),
+            Opcode::CLV => self.clv(),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -565,11 +607,11 @@ mod tests {
 
         // Now we should have pushed our PC and the processor status to the stack.
         assert_eq!(0x01, cpu.pc);
-        assert!(cpu.processor_status.is_interrupt());
+        assert!(cpu.processor_status.is_break());
         assert_eq!(7, cpu.cycle_count);
         assert_eq!(0xFC, cpu.sp);
         assert_eq!(0x03, cpu.memory.get_byte(0x10FF));
         assert_eq!(0x00, cpu.memory.get_byte(0x10FE));
-        assert_eq!(ProcessorStatus::from(0x42).set_interrupt().into(), cpu.memory.get_byte(0x10FD));
+        assert_eq!(0x52, cpu.memory.get_byte(0x10FD));
     }
 }

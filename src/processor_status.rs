@@ -59,6 +59,19 @@ impl ProcessorStatus {
         (self.0 >> 2) & 0x01 == 0x01
     }
 
+    // Decimal Flag
+    pub fn set_decimal(self) -> Self {
+        Self::from(self.0 | 0x80)
+    }
+
+    pub fn clear_decimal(self) -> Self {
+        Self::from(self.0 & (0xFF - 0x80))
+    }
+
+    pub fn is_decimal(&self) -> bool {
+        (self.0 >> 3) & 0x01 == 0x01
+    }
+
     // Break Flag
     pub fn set_break(self) -> Self {
         Self::from(self.0 | 0x10)
