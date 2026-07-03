@@ -14,6 +14,9 @@ enum Opcode {
     BCS,
     BEQ,
     BIT,
+    BMI,
+    BNE,
+    BPL,
 }
 
 pub struct Cpu {
@@ -154,6 +157,12 @@ impl Cpu {
             0x24 => (BIT, self.zero_page(), 3),
             0x2C => (BIT, self.absolute(), 4),
 
+            0x30 => (BMI, self.relative(), 2),
+
+            0xD0 => (BNE, self.relative(), 2),
+            
+            0x10 => (BPL, self.relative(), 2),
+
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
         FetchInstructionResult::new(opcode, addressing_mode, cycles)
@@ -250,7 +259,7 @@ impl Cpu {
     // Branch on Carry Clear
     // branch on C = 0
     // Affects Flags: (none)
-    // Returns a 1 if we branch or a 0 if we don't (cycle count).
+    // Returns a bool for whether or not we branch.
     fn bcc(&mut self, m: u8) -> bool {
         if !self.processor_status.is_carry() {
             self.pc = self.pc.wrapping_add(m as u16);
@@ -263,7 +272,7 @@ impl Cpu {
     // Branch on Carry Set
     // branch on C = 1
     // Affects Flags: (none)
-    // Returns a 1 if we branch or a 0 if we don't (cycle count).
+    // Returns a bool for whether or not we branch.
     fn bcs(&mut self, m: u8) -> bool {
         if self.processor_status.is_carry() {
             self.pc = self.pc.wrapping_add(m as u16);
@@ -276,7 +285,7 @@ impl Cpu {
     // Branch on Zero Flag Set
     // branch on Z = 1
     // Affects Flags: (none)
-    // Returns a 1 if we branch or a 0 if we don't (cycle count).
+    // Returns a bool for whether or not we branch.
     fn beq(&mut self, m: u8) -> bool {
         if self.processor_status.is_zero() {
             self.pc = self.pc.wrapping_add(m as u16);
@@ -290,7 +299,7 @@ impl Cpu {
     // Sets the zero flag based on the value of A & M.
     // Also sets N and V based on bits 7 and 6 of M respectively.
     // Affects Flags: N V Z
-    // Returns a 1 if we branch or a 0 if we don't (cycle count).
+    // Returns a bool for whether or not we branch.
     fn bit(&mut self, m: u8) {
         self.check_and_set_negative(m);
         println!("0x{:02X}", m);
@@ -300,6 +309,45 @@ impl Cpu {
             self.processor_status = self.processor_status.clear_overflow();
         }
         self.check_and_set_zero(self.a & m);
+    }
+
+    // Branch on Result Minus
+    // branch on N = 1
+    // Affects Flags: (none)
+    // Returns a bool for whether or not we branch.
+    fn bmi(&mut self, m: u8) -> bool {
+        if self.processor_status.is_negative() {
+            self.pc = self.pc.wrapping_add(m as u16);
+            true
+        } else {
+            false
+        }
+    }
+
+    // Branch on Result Not Zero
+    // branch on Z = 0
+    // Affects Flags: (none)
+    // Returns a bool for whether or not we branch.
+    fn bne(&mut self, m: u8) -> bool {
+        if !self.processor_status.is_zero() {
+            self.pc = self.pc.wrapping_add(m as u16);
+            true
+        } else {
+            false
+        }
+    }
+
+    // Branch on Result Plus
+    // branch on N = 0
+    // Affects Flags: (none)
+    // Returns a bool for whether or not we branch.
+    fn bpl(&mut self, m: u8) -> bool {
+        if !self.processor_status.is_negative() {
+            self.pc = self.pc.wrapping_add(m as u16);
+            true
+        } else {
+            false
+        }
     }
 
     // A bit of a hack to deal with the variability of branch cycles.
@@ -340,6 +388,9 @@ impl Cpu {
             Opcode::BCS => Self::calculate_branch_cycles(&mut num_cycles, self.bcs(data), pbc),
             Opcode::BEQ => Self::calculate_branch_cycles(&mut num_cycles, self.beq(data), pbc),
             Opcode::BIT => self.bit(data),
+            Opcode::BMI => Self::calculate_branch_cycles(&mut num_cycles, self.bmi(data), pbc),
+            Opcode::BNE => Self::calculate_branch_cycles(&mut num_cycles, self.bne(data), pbc),
+            Opcode::BPL => Self::calculate_branch_cycles(&mut num_cycles, self.bpl(data), pbc),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
