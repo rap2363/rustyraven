@@ -48,6 +48,12 @@ enum Opcode {
     RTI,
     RTS,
     SBC,
+    SEC,
+    SED,
+    SEI,
+    STA,
+    STX,
+    STY,
 }
 
 pub struct Cpu {
@@ -367,6 +373,28 @@ impl Cpu {
             0xF9 => (SBC, self.absolute_y(), 4),
             0xE1 => (SBC, self.indirect_zero_page_x(), 6),
             0xF1 => (SBC, self.indirect_zero_page_y(), 5),
+
+            0x38 => (SEC, self.implied(), 2),
+
+            0xF8 => (SED, self.implied(), 2),
+
+            0x78 => (SEI, self.implied(), 2),
+
+            0x85 => (STA, self.zero_page(), 3),
+            0x95 => (STA, self.zero_page_x(), 4),
+            0x8D => (STA, self.absolute(), 4),
+            0x9D => (STA, self.absolute_x(), 5),
+            0x99 => (STA, self.absolute_y(), 5),
+            0x81 => (STA, self.indirect_zero_page_x(), 6),
+            0x91 => (STA, self.indirect_zero_page_y(), 6),
+
+            0x86 => (STX, self.zero_page(), 3),
+            0x96 => (STX, self.zero_page_y(), 4),
+            0x8E => (STX, self.absolute(), 4),
+
+            0x84 => (STY, self.zero_page(), 3),
+            0x94 => (STY, self.zero_page_x(), 4),
+            0x8C => (STY, self.absolute(), 4),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -903,6 +931,42 @@ impl Cpu {
         self.a = result as u8;
     }
 
+    // Set the carry flag.
+    fn sec(&mut self) {
+        self.processor_status = self.processor_status.set_carry();
+    }
+
+    // Set the decimal flag.
+    fn sed(&mut self) {
+        self.processor_status = self.processor_status.set_decimal();
+    }
+
+    // Set the interrupt disable flag.
+    fn sei(&mut self) {
+        self.processor_status = self.processor_status.set_interrupt();
+    }
+
+    // Store accumulator into memory
+    // M <- A
+    // Affects flags: (none)
+    fn sta(&mut self, address: u16) {
+        self.memory.write_byte(address, self.a);
+    }
+
+    // Store X into memory
+    // M <- X
+    // Affects flags: (none)
+    fn stx(&mut self, address: u16) {
+        self.memory.write_byte(address, self.x);
+    }
+
+    // Store Y into memory
+    // M <- Y
+    // Affects flags: (none)
+    fn sty(&mut self, address: u16) {
+        self.memory.write_byte(address, self.y);
+    }
+
     // ----------- Instruction Fetching ----------- //
 
     // A bit of a hack to deal with the variability of branch cycles.
@@ -1004,6 +1068,12 @@ impl Cpu {
             Opcode::RTI => self.rti(),
             Opcode::RTS => self.rts(),
             Opcode::SBC => self.sbc(data),
+            Opcode::SEC => self.sec(),
+            Opcode::SED => self.sed(),
+            Opcode::SEI => self.sei(),
+            Opcode::STA => self.sta(address.expect("Address should have been supplied for a STA!")),
+            Opcode::STX => self.sta(address.expect("Address should have been supplied for a STX!")),
+            Opcode::STY => self.sta(address.expect("Address should have been supplied for a STY!")),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -1347,5 +1417,15 @@ mod tests {
         assert!(!cpu.processor_status.is_negative());
         assert!(!cpu.processor_status.is_zero());
         assert!(!cpu.processor_status.is_carry());
+    }
+
+    #[test]
+    fn test_sta() {
+        let mut cpu = Cpu::initialize();
+        cpu.a = 0x42;
+        cpu.memory.write_bytes(0x00, &[0x8D, 0x34, 0x12]);
+
+        cpu.fetch_instruction_and_execute();
+        assert_eq!(cpu.memory.read_byte(0x1234), 0x42);
     }
 }
