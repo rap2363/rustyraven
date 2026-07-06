@@ -47,6 +47,7 @@ enum Opcode {
     ROR,
     RTI,
     RTS,
+    SBC,
 }
 
 pub struct Cpu {
@@ -357,6 +358,15 @@ impl Cpu {
             0x40 => (RTI, self.implied(), 6),
 
             0x60 => (RTS, self.implied(), 6),
+
+            0xE9 => (SBC, self.immediate(), 2),
+            0xE5 => (SBC, self.zero_page(), 3),
+            0xF5 => (SBC, self.zero_page_x(), 4),
+            0xED => (SBC, self.absolute(), 4),
+            0xFD => (SBC, self.absolute_x(), 4),
+            0xF9 => (SBC, self.absolute_y(), 4),
+            0xE1 => (SBC, self.indirect_zero_page_x(), 6),
+            0xF1 => (SBC, self.indirect_zero_page_y(), 5),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -875,6 +885,24 @@ impl Cpu {
         self.pc = self.pull_address().wrapping_add(1);
     }
 
+    // Subtract Memory from Accumulator With Borrow
+    // A <- A - M - !C
+    // Affects Flags: N Z C V
+    fn sbc(&mut self, m: u8) {
+        let extended_result = (self.a as u16) - (m as u16) - (0x0001 - self.processor_status.carry() as u16);
+        let c = (extended_result >> 8) & 0x0001 == 0x0001;
+
+        let result = extended_result as u8;
+
+        // Flags
+        self.check_and_set_negative(result);
+        self.check_and_set_overflow(extended_result);
+        self.check_and_set_zero(result);
+        self.check_and_set_carry(c);
+
+        self.a = result as u8;
+    }
+
     // ----------- Instruction Fetching ----------- //
 
     // A bit of a hack to deal with the variability of branch cycles.
@@ -975,6 +1003,7 @@ impl Cpu {
             },
             Opcode::RTI => self.rti(),
             Opcode::RTS => self.rts(),
+            Opcode::SBC => self.sbc(data),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -1303,5 +1332,20 @@ mod tests {
         assert_eq!(cpu.x, 0xFF);
         // Cycles for a JSR, LDA, RTI, and LDA
         assert_eq!(cpu.cycle_count, 6 + 2 + 6 + 2);
+    }
+
+    #[test]
+    fn test_sbc() {
+        let mut cpu = Cpu::initialize();
+        cpu.a = 0x03F;
+        cpu.memory.write_bytes(0x00, &[0xE9, 0x02]);
+        cpu.fetch_instruction_and_execute();
+
+        assert_eq!(0x3C, cpu.a);
+        assert_eq!(0x02, cpu.pc);
+        assert!(!cpu.processor_status.is_overflow());
+        assert!(!cpu.processor_status.is_negative());
+        assert!(!cpu.processor_status.is_zero());
+        assert!(!cpu.processor_status.is_carry());
     }
 }
