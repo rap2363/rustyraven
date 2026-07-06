@@ -37,6 +37,8 @@ enum Opcode {
     LDX,
     LDY,
     LSR,
+    NOP,
+    ORA,
 }
 
 pub struct Cpu {
@@ -307,6 +309,17 @@ impl Cpu {
             0x56 => (LSR, self.zero_page_x(), 6),
             0x4E => (LSR, self.absolute(), 6),
             0x5E => (LSR, self.absolute_x(), 7),
+
+            0xEA => (NOP, self.implied(), 2),
+
+            0x09 => (ORA, self.immediate(), 2),
+            0x05 => (ORA, self.zero_page(), 3),
+            0x15 => (ORA, self.zero_page_x(), 4),
+            0x0D => (ORA, self.absolute(), 4),
+            0x1D => (ORA, self.absolute_x(), 4),
+            0x19 => (ORA, self.absolute_y(), 4),
+            0x01 => (ORA, self.indirect_zero_page_x(), 6),
+            0x11 => (ORA, self.indirect_zero_page_y(), 5),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -731,6 +744,15 @@ impl Cpu {
             }
         }
     }
+    
+    // OR A with M.
+    // A <- A OR M
+    // Affects flags: N Z
+    fn ora(&mut self, m: u8) {
+        self.a = self.a | m;
+        self.check_and_set_negative(self.a);
+        self.check_and_set_zero(self.a);
+    }
 
     // ----------- Instruction Fetching ----------- //
 
@@ -806,6 +828,8 @@ impl Cpu {
                 };
                 self.lsr(data, wl);
             },
+            Opcode::NOP => {}, // an actual noop
+            Opcode::ORA => self.ora(data),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -1049,5 +1073,24 @@ mod tests {
         assert!(!cpu.processor_status.is_negative());
         assert!(cpu.processor_status.is_zero());
         assert!(!cpu.processor_status.is_carry());
+    }
+
+    #[test]
+    fn test_ora_and_eor() {
+        let mut cpu = Cpu::initialize();
+        cpu.a = 0x50;
+        cpu.memory.write_bytes(0x00, &[0x09, 0x05, 0x49, 0xAA]);
+
+        // One instruction should just OR A with 0x05.
+        cpu.fetch_instruction_and_execute();
+        assert_eq!(cpu.a, 0x55);
+        assert!(!cpu.processor_status.is_negative());
+        assert!(!cpu.processor_status.is_zero());
+
+        // Another will effectively make A = 0xFF.
+        cpu.fetch_instruction_and_execute();
+        assert_eq!(cpu.a, 0xFF);
+        assert!(cpu.processor_status.is_negative());
+        assert!(!cpu.processor_status.is_zero());
     }
 }
