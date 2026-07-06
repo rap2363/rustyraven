@@ -35,6 +35,10 @@ enum Opcode {
     INX,
     INY,
     JMP,
+    JSR,
+    LDA,
+    LDX,
+    LDY
 }
 
 pub struct Cpu {
@@ -83,8 +87,8 @@ impl Cpu {
         self.pc = self.pc.wrapping_add(1);
     }
 
-    fn push_stack(&mut self, data: u8) {
-        self.memory.write_byte_to_stack(self.sp, data);
+    fn push_stack(&mut self, m: u8) {
+        self.memory.write_byte_to_stack(self.sp, m);
         self.sp = self.sp.wrapping_sub(1);
     }
 
@@ -277,6 +281,29 @@ impl Cpu {
             0x4C => (JMP, self.absolute(), 3),
             0x6C => (JMP, self.indirect(), 5),
 
+            0x20 => (JSR, self.absolute(), 6),
+
+            0xA9 => (LDA, self.immediate(), 2),
+            0xA5 => (LDA, self.zero_page(), 3),
+            0xB5 => (LDA, self.zero_page_x(), 4),
+            0xAD => (LDA, self.absolute(), 4),
+            0xBD => (LDA, self.absolute_x(), 4),
+            0xB9 => (LDA, self.absolute_y(), 4),
+            0xA1 => (LDA, self.indirect_zero_page_x(), 6),
+            0xB1 => (LDA, self.indirect_zero_page_y(), 5),    
+
+            0xA2 => (LDX, self.immediate(), 2),
+            0xA6 => (LDX, self.zero_page(), 3),
+            0xB6 => (LDX, self.zero_page_y(), 4),
+            0xAE => (LDX, self.absolute(), 4),
+            0xBE => (LDX, self.absolute_y(), 4),
+
+            0xA0 => (LDY, self.immediate(), 2),
+            0xA4 => (LDY, self.zero_page(), 3),
+            0xB4 => (LDY, self.zero_page_x(), 4),
+            0xAC => (LDY, self.absolute(), 4),
+            0xBC => (LDY, self.absolute_x(), 4),
+
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
         FetchInstructionResult::new(opcode, addressing_mode, cycles)
@@ -466,14 +493,14 @@ impl Cpu {
 
     // Forces a software interrupt. We do the following:
     // 1. Set the interrupt flag,
-    // 2. Push the PC+2 to the stack (return address is 2 bytes after the current PC!)
+    // 2. Push the PC+1 to the stack (return address is 1 byte after the current PC because the BRK is always followed by a dummy opcode)
     // 3. Push the status register to the stack
     fn brk(&mut self) {
         self.processor_status = self.processor_status.set_break();
-        let pc_plus_two = self.pc.wrapping_add(2);
-        // Little Endian, push the low bits, then the high ones.
-        self.push_stack(pc_plus_two as u8);
-        self.push_stack((pc_plus_two >> 4) as u8);
+        let return_address = self.pc.wrapping_add(1);
+        // Little Endian, push $LL, then $HH.
+        self.push_stack(return_address as u8);
+        self.push_stack((return_address >> 8) as u8);
         self.push_stack(self.processor_status.into());
     }
 
@@ -546,31 +573,31 @@ impl Cpu {
     // This will set the carry if A - M > 0, the negative flag if A - M < 0, and the zero flag if A - M = 0.
     // A - M
     // Affects Flags: N Z C
-    fn cmp(&mut self, data: u8) {
-        self.processor_status = self.cmp_processor_status((self.a as i8) - (data as i8));
+    fn cmp(&mut self, m: u8) {
+        self.processor_status = self.cmp_processor_status((self.a as i8) - (m as i8));
     }
 
     // Compare X register to memory (this *only* sets flags based on the value of X - M).
     // This will set the carry if X - M > 0, the negative flag if X - M < 0, and the zero flag if X - M = 0.
     // X - M
     // Affects Flags: N Z C
-    fn cpx(&mut self, data: u8) {
-        self.processor_status = self.cmp_processor_status((self.x as i8) - (data as i8));
+    fn cpx(&mut self, m: u8) {
+        self.processor_status = self.cmp_processor_status((self.x as i8) - (m as i8));
     }
 
     // Compare accumulator to memory (this *only* sets flags based on the value of Y - M).
     // This will set the carry if Y - M > 0, the negative flag if Y - M < 0, and the zero flag if Y - M = 0.
     // Y - M
     // Affects Flags: N Z C
-    fn cpy(&mut self, data: u8) {
-        self.processor_status = self.cmp_processor_status((self.y as i8) - (data as i8));
+    fn cpy(&mut self, m: u8) {
+        self.processor_status = self.cmp_processor_status((self.y as i8) - (m as i8));
     }
 
     // Decrement memory by one. Requires us to *write* to a location in memory.
     // M <- M - 1
     // Affects Flags: N Z
-    fn dec(&mut self, data: u8, address: u16) {
-        let result = data.wrapping_sub(1);
+    fn dec(&mut self, m: u8, address: u16) {
+        let result = m.wrapping_sub(1);
         self.check_and_set_negative(result);
         self.check_and_set_zero(result);
 
@@ -598,8 +625,8 @@ impl Cpu {
     // Exclusive OR A with M.
     // A <- A xor M
     // Affects flags: N Z
-    fn eor(&mut self, data: u8) {
-        self.a = self.a ^ data;
+    fn eor(&mut self, m: u8) {
+        self.a = self.a ^ m;
         self.check_and_set_negative(self.a);
         self.check_and_set_zero(self.a);
     }
@@ -607,8 +634,8 @@ impl Cpu {
     // Increment memory by one. Requires us to *write* to a location in memory.
     // M <- M + 1
     // Affects Flags: N Z
-    fn inc(&mut self, data: u8, address: u16) {
-        let result = data.wrapping_add(1);
+    fn inc(&mut self, m: u8, address: u16) {
+        let result = m.wrapping_add(1);
         self.check_and_set_negative(result);
         self.check_and_set_zero(result);
 
@@ -638,6 +665,46 @@ impl Cpu {
     // Affects Flags: (none)
     fn jmp(&mut self, address: u16) {
         self.pc = address;
+    }
+
+    // Jump to a new location and save the return address - 1 on the stack. Since we're already in the next byte we
+    // need to decrement the pc once.
+    // push return address (PC - 1)
+    // PC <- $HHLL
+    // Affects Flags: (none)
+    fn jsr(&mut self, address: u16) {
+        // Little Endian: push the $LL, then $HH so that RTI can pull properly.
+        let return_address = self.pc.wrapping_sub(1);
+        self.push_stack(return_address as u8);
+        self.push_stack((return_address >> 8) as u8);
+        self.pc = address;
+    }
+
+    // Load accumulator with data from memory.
+    // A <- M
+    // Affects Flags: N Z
+    fn lda(&mut self, m: u8) {
+        self.check_and_set_negative(m);
+        self.check_and_set_zero(m);
+        self.a = m;
+    }
+
+    // Load register X with data from memory.
+    // X <- M
+    // Affects Flags: N Z
+    fn ldx(&mut self, m: u8) {
+        self.check_and_set_negative(m);
+        self.check_and_set_zero(m);
+        self.x = m;
+    }
+
+    // Load accumulator with data from memory.
+    // A <- M
+    // Affects Flags: N Z
+    fn ldy(&mut self, m: u8) {
+        self.check_and_set_negative(m);
+        self.check_and_set_zero(m);
+        self.y = m;
     }
 
     // ----------- Instruction Fetching ----------- //
@@ -701,6 +768,10 @@ impl Cpu {
             Opcode::INX => self.dex(),
             Opcode::INY => self.dey(),
             Opcode::JMP => self.jmp(address.expect("Address should have been supplied for a JMP!")),
+            Opcode::JSR => self.jsr(address.expect("Address should have been supplied for a JSR!")),
+            Opcode::LDA => self.lda(data),
+            Opcode::LDX => self.ldx(data),
+            Opcode::LDY => self.ldy(data),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -816,7 +887,7 @@ mod tests {
         assert!(cpu.processor_status.is_break());
         assert_eq!(7, cpu.cycle_count);
         assert_eq!(0xFC, cpu.sp);
-        assert_eq!(0x03, cpu.memory.read_byte(0x10FF));
+        assert_eq!(0x02, cpu.memory.read_byte(0x10FF));
         assert_eq!(0x00, cpu.memory.read_byte(0x10FE));
         assert_eq!(0x52, cpu.memory.read_byte(0x10FD));
     }
@@ -891,5 +962,30 @@ mod tests {
 
         assert_eq!(cpu.pc, 0xBEEF);
         assert_eq!(5, cpu.cycle_count);
+    }
+
+
+    #[test]
+    fn test_jsr() {
+        let mut cpu = Cpu::initialize();
+        cpu.pc = 0x1234;
+        cpu.memory.write_bytes(0x1234, &[0x20, 0xEF, 0xBE]);
+
+        cpu.fetch_instruction_and_execute();
+        assert_eq!(cpu.pc, 0xBEEF);
+        assert_eq!(cpu.cycle_count, 6);
+        assert_eq!(0x36, cpu.memory.read_byte(0x10FF));
+        assert_eq!(0x12, cpu.memory.read_byte(0x10FE));
+    }
+
+    #[test]
+    fn test_loads() {
+        let mut cpu = Cpu::initialize();
+        cpu.memory.write_bytes(0x00, &[0xA9, 0x42]);
+
+        cpu.fetch_instruction_and_execute();
+        assert_eq!(cpu.pc, 0x02);
+        assert_eq!(cpu.cycle_count, 2);
+        assert_eq!(cpu.a, 0x42);        
     }
 }
