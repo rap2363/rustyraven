@@ -24,6 +24,9 @@ enum Opcode {
     CLD,
     CLI,
     CLV,
+    CMP,
+    CPX,
+    CPY,
 }
 
 pub struct Cpu {
@@ -192,10 +195,30 @@ impl Cpu {
             0x70 => (BVS, self.relative(), 2),
 
             0x18 => (CLC, self.implied(), 2),
+
             0xD8 => (CLD, self.implied(), 2),
+            
             0x58 => (CLI, self.implied(), 2),
+            
             0xB8 => (CLV, self.implied(), 2),
 
+            0xC9 => (CMP, self.immediate(), 2),
+            0xC5 => (CMP, self.zero_page(), 3),
+            0xD5 => (CMP, self.zero_page_x(), 4),
+            0xCD => (CMP, self.absolute(), 4),
+            0xDD => (CMP, self.absolute_x(), 4),
+            0xD9 => (CMP, self.absolute_y(), 4),
+            0xC1 => (CMP, self.indirect_zero_page_x(), 6),
+            0xD1 => (CMP, self.indirect_zero_page_y(), 5),
+
+            0xE0 => (CPX, self.immediate(), 2),
+            0xE4 => (CPX, self.zero_page(), 3),
+            0xEC => (CPX, self.absolute(), 4),
+
+            0xC0 => (CPY, self.immediate(), 2),
+            0xC4 => (CPY, self.zero_page(), 3),
+            0xCC => (CPY, self.absolute(), 4),
+            
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
         FetchInstructionResult::new(opcode, addressing_mode, cycles)
@@ -450,6 +473,41 @@ impl Cpu {
         self.processor_status = self.processor_status.clear_overflow();
     }
 
+    // Helper method for the cmp ops.
+    fn cmp_processor_status(&self, data: i8) -> ProcessorStatus {
+        if data > 0 {
+            self.processor_status.set_carry().clear_negative().clear_zero()
+        } else if data < 0 {
+            self.processor_status.set_negative().clear_carry().clear_zero()
+        } else {
+            self.processor_status.set_zero().clear_carry().clear_negative()
+        }
+    }
+
+    // Compare accumulator to memory (this *only* sets flags based on the value of A - M).
+    // This will set the carry if A - M > 0, the negative flag if A - M < 0, and the zero flag if A - M = 0.
+    // A - M
+    // Affects Flags: N Z C
+    fn cmp(&mut self, data: u8) {
+        self.processor_status = self.cmp_processor_status((self.a as i8) - (data as i8));
+    }
+
+    // Compare X register to memory (this *only* sets flags based on the value of X - M).
+    // This will set the carry if X - M > 0, the negative flag if X - M < 0, and the zero flag if X - M = 0.
+    // X - M
+    // Affects Flags: N Z C
+    fn cpx(&mut self, data: u8) {
+        self.processor_status = self.cmp_processor_status((self.x as i8) - (data as i8));
+    }
+
+    // Compare accumulator to memory (this *only* sets flags based on the value of Y - M).
+    // This will set the carry if Y - M > 0, the negative flag if Y - M < 0, and the zero flag if Y - M = 0.
+    // Y - M
+    // Affects Flags: N Z C
+    fn cpy(&mut self, data: u8) {
+        self.processor_status = self.cmp_processor_status((self.y as i8) - (data as i8));
+    }
+
     // A bit of a hack to deal with the variability of branch cycles.
     fn calculate_branch_cycles(num_cycles: &mut usize, branch: bool, pbc: bool) {
         // Cycle Calculation
@@ -498,6 +556,9 @@ impl Cpu {
             Opcode::CLD => self.cld(),
             Opcode::CLI => self.cli(),
             Opcode::CLV => self.clv(),
+            Opcode::CMP => self.cmp(data),
+            Opcode::CPX => self.cpx(data),
+            Opcode::CPY => self.cpy(data),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -616,5 +677,27 @@ mod tests {
         assert_eq!(0x03, cpu.memory.read_byte(0x10FF));
         assert_eq!(0x00, cpu.memory.read_byte(0x10FE));
         assert_eq!(0x52, cpu.memory.read_byte(0x10FD));
+    }
+
+    #[test]
+    fn test_cmp() {
+        let mut cpu = Cpu::initialize();
+        cpu.a = 0x42;
+        cpu.memory.write_bytes(0x00, &[0xC9, 0x43, 0xC9, 0x42, 0xC9, 0x41]);
+
+        cpu.fetch_instruction_and_execute();
+        assert!(cpu.processor_status.is_negative());
+        assert!(!cpu.processor_status.is_zero());
+        assert!(!cpu.processor_status.is_carry());
+
+        cpu.fetch_instruction_and_execute();
+        assert!(!cpu.processor_status.is_negative());
+        assert!(cpu.processor_status.is_zero());
+        assert!(!cpu.processor_status.is_carry());
+
+        cpu.fetch_instruction_and_execute();
+        assert!(!cpu.processor_status.is_negative());
+        assert!(!cpu.processor_status.is_zero());
+        assert!(cpu.processor_status.is_carry());
     }
 }
