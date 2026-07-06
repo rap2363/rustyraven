@@ -27,6 +27,13 @@ enum Opcode {
     CMP,
     CPX,
     CPY,
+    DEC,
+    DEX,
+    DEY,
+    EOR,
+    INC,
+    INX,
+    INY,
 }
 
 pub struct Cpu {
@@ -102,7 +109,7 @@ impl Cpu {
     }
 
     fn implied(&mut self) -> AddressingMode {
-        // Note we do not increment the PC!
+        // Note we do not increment the PC because we don't need to fetch a new byte!
         AddressingMode::Implied
     }
 
@@ -118,6 +125,10 @@ impl Cpu {
         AddressingMode::IndexedZeroPageX(self.fetch_next_byte())
     }
 
+    fn zero_page_y(&mut self) -> AddressingMode {
+        AddressingMode::IndexedZeroPageY(self.fetch_next_byte())
+    }
+
     fn absolute(&mut self) -> AddressingMode {
         AddressingMode::Absolute(self.fetch_next_two_bytes())
     }
@@ -131,11 +142,11 @@ impl Cpu {
     }
 
     fn indirect_zero_page_x(&mut self) -> AddressingMode {
-        AddressingMode::IndexedZeroPageX(self.fetch_next_byte())
+        AddressingMode::IndirectZeroPageX(self.fetch_next_byte())
     }
 
     fn indirect_zero_page_y(&mut self) -> AddressingMode {
-        AddressingMode::IndexedZeroPageY(self.fetch_next_byte())
+        AddressingMode::IndirectZeroPageY(self.fetch_next_byte())
     }
 
     fn relative(&mut self) -> AddressingMode {
@@ -218,7 +229,35 @@ impl Cpu {
             0xC0 => (CPY, self.immediate(), 2),
             0xC4 => (CPY, self.zero_page(), 3),
             0xCC => (CPY, self.absolute(), 4),
-            
+
+            0xC6 => (DEC, self.zero_page(), 5),
+            0xD6 => (DEC, self.zero_page_x(), 6),
+            0xCE => (DEC, self.absolute(), 6),
+            0xDE => (DEC, self.absolute_x(), 7),
+
+            0xCA => (DEX, self.implied(), 2),
+
+            0x88 => (DEY, self.implied(), 2),
+
+            0x49 => (EOR, self.immediate(), 2),
+            0x45 => (EOR, self.zero_page(), 3),
+            0x55 => (EOR, self.zero_page_x(), 4),
+            0x4D => (EOR, self.absolute(), 4),
+            0x5D => (EOR, self.absolute_x(), 4),
+            0x59 => (EOR, self.absolute_y(), 4),
+            0x41 => (EOR, self.indirect_zero_page_x(), 6),
+            0x51 => (EOR, self.indirect_zero_page_y(), 5),
+
+
+            0xE6 => (INC, self.zero_page(), 5),
+            0xF6 => (INC, self.zero_page_x(), 6),
+            0xEE => (INC, self.absolute(), 6),
+            0xFE => (INC, self.absolute_x(), 7),
+
+            0xE8 => (INX, self.implied(), 2),
+
+            0xC8 => (INY, self.implied(), 2),
+
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
         FetchInstructionResult::new(opcode, addressing_mode, cycles)
@@ -508,6 +547,75 @@ impl Cpu {
         self.processor_status = self.cmp_processor_status((self.y as i8) - (data as i8));
     }
 
+    // Decrement memory by one. Requires us to *write* to a location in memory.
+    // M <- M - 1
+    // Affects Flags: N Z
+    fn dec(&mut self, data: u8, address: u16) {
+        let result = data.wrapping_sub(1);
+        self.check_and_set_negative(result);
+        self.check_and_set_zero(result);
+
+        self.memory.write_byte(address, result);
+    }
+
+    // Decrement the X register by one.
+    // X <- X - 1
+    // Affects Flags: N Z
+    fn dex(&mut self) {
+        self.x = self.x.wrapping_sub(1);
+        self.check_and_set_negative(self.x);
+        self.check_and_set_zero(self.x);
+    }
+
+    // Decrement the Y register by one.
+    // Y <- Y - 1
+    // Affects Flags: N Z
+    fn dey(&mut self) {
+        self.y = self.y.wrapping_sub(1);
+        self.check_and_set_negative(self.y);
+        self.check_and_set_zero(self.y);
+    }
+
+    // Exclusive OR A with M.
+    // A <- A xor M
+    // Affects flags: N Z
+    fn eor(&mut self, data: u8) {
+        self.a = self.a ^ data;
+        self.check_and_set_negative(self.a);
+        self.check_and_set_zero(self.a);
+    }
+    
+    // Increment memory by one. Requires us to *write* to a location in memory.
+    // M <- M + 1
+    // Affects Flags: N Z
+    fn inc(&mut self, data: u8, address: u16) {
+        let result = data.wrapping_add(1);
+        self.check_and_set_negative(result);
+        self.check_and_set_zero(result);
+
+        self.memory.write_byte(address, result);
+    }
+
+    // Increment the X register by one.
+    // X <- X + 1
+    // Affects Flags: N Z
+    fn inx(&mut self) {
+        self.x = self.x.wrapping_add(1);
+        self.check_and_set_negative(self.x);
+        self.check_and_set_zero(self.x);
+    }
+
+    // Increment the Y register by one.
+    // Y <- Y + 1
+    // Affects Flags: N Z
+    fn iny(&mut self) {
+        self.y = self.y.wrapping_add(1);
+        self.check_and_set_negative(self.y);
+        self.check_and_set_zero(self.y);
+    }
+
+    // ----------- Instruction Fetching ----------- //
+
     // A bit of a hack to deal with the variability of branch cycles.
     fn calculate_branch_cycles(num_cycles: &mut usize, branch: bool, pbc: bool) {
         // Cycle Calculation
@@ -559,6 +667,13 @@ impl Cpu {
             Opcode::CMP => self.cmp(data),
             Opcode::CPX => self.cpx(data),
             Opcode::CPY => self.cpy(data),
+            Opcode::DEC => self.dec(data, address.expect("Address should be supplied for a DEC!")),
+            Opcode::DEX => self.dex(),
+            Opcode::DEY => self.dey(),
+            Opcode::EOR => self.eor(data),
+            Opcode::INC => self.dec(data, address.expect("Address should be supplied for a INC!")),
+            Opcode::INX => self.dex(),
+            Opcode::INY => self.dey(),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -699,5 +814,31 @@ mod tests {
         assert!(!cpu.processor_status.is_negative());
         assert!(!cpu.processor_status.is_zero());
         assert!(cpu.processor_status.is_carry());
+    }
+
+    #[test]
+    fn test_dec() {
+        let mut cpu = Cpu::initialize();
+        // We'll decrement three times (the last one will be using the absolute addressing mode)
+        cpu.memory.write_bytes(0x00, &[0xC6, 0x42, 0xC6, 0x42, 0xCE, 0x42, 0x00]);
+        cpu.memory.write_byte(0x42, 0x02);
+
+        cpu.fetch_instruction_and_execute();
+        assert!(!cpu.processor_status.is_negative());
+        assert!(!cpu.processor_status.is_zero());
+        assert_eq!(cpu.memory.read_byte(0x0042), 0x01);
+        assert_eq!(5, cpu.cycle_count);
+
+        cpu.fetch_instruction_and_execute();
+        assert!(!cpu.processor_status.is_negative());
+        assert!(cpu.processor_status.is_zero());
+        assert_eq!(cpu.memory.read_byte(0x0042), 0x00);
+        assert_eq!(10, cpu.cycle_count);
+
+        cpu.fetch_instruction_and_execute();
+        assert!(cpu.processor_status.is_negative());
+        assert!(!cpu.processor_status.is_zero());
+        assert_eq!(cpu.memory.read_byte(0x0042), 0xFF);
+        assert_eq!(16, cpu.cycle_count);
     }
 }
