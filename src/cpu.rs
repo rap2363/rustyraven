@@ -1,6 +1,3 @@
-use core::num;
-use std::net::Shutdown::Write;
-
 use crate::addressing_modes::{AddressingMode, AddressingModeData, PageBoundaryResult::PageBoundaryCrossed};
 use crate::memory::CpuMemory;
 use crate::processor_status::ProcessorStatus;
@@ -38,7 +35,8 @@ enum Opcode {
     JSR,
     LDA,
     LDX,
-    LDY
+    LDY,
+    LSR,
 }
 
 pub struct Cpu {
@@ -303,6 +301,12 @@ impl Cpu {
             0xB4 => (LDY, self.zero_page_x(), 4),
             0xAC => (LDY, self.absolute(), 4),
             0xBC => (LDY, self.absolute_x(), 4),
+
+            0x4A => (LSR, self.implied(), 2),
+            0x46 => (LSR, self.zero_page(), 5),
+            0x56 => (LSR, self.zero_page_x(), 6),
+            0x4E => (LSR, self.absolute(), 6),
+            0x5E => (LSR, self.absolute_x(), 7),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -707,6 +711,27 @@ impl Cpu {
         self.y = m;
     }
 
+    // Logical Shift Right for accumulator or memory location.
+    // Original 0 bit is shifted into carry and bit 7 is always 0, so N is cleared.
+    // Affects Flags: N=0 Z C
+    fn lsr(&mut self, m: u8, write_location: WriteLocation) {
+        let result = m >> 1;
+
+        // Flags
+        self.check_and_set_carry(m & 0x80 == 0x080);
+        self.check_and_set_zero(result);
+        self.processor_status = self.processor_status.clear_negative();
+
+        match write_location {
+            WriteLocation::Accumulator => {
+                self.a = result
+            },
+            WriteLocation::Memory(address) => {
+                self.memory.write_byte(address, result);
+            }
+        }
+    }
+
     // ----------- Instruction Fetching ----------- //
 
     // A bit of a hack to deal with the variability of branch cycles.
@@ -772,6 +797,15 @@ impl Cpu {
             Opcode::LDA => self.lda(data),
             Opcode::LDX => self.ldx(data),
             Opcode::LDY => self.ldy(data),
+            Opcode::LSR => {
+                // We write to memory if we returned a specific address.
+                let (data, wl) = if let Some(address) = address {
+                    (data, WriteLocation::Memory(address))
+                } else {
+                    (self.a, WriteLocation::Accumulator)
+                };
+                self.lsr(data, wl);
+            },
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -987,5 +1021,33 @@ mod tests {
         assert_eq!(cpu.pc, 0x02);
         assert_eq!(cpu.cycle_count, 2);
         assert_eq!(cpu.a, 0x42);        
+    }
+
+    #[test]
+    fn test_lsr() {
+        let mut cpu = Cpu::initialize();
+        cpu.a = 0xF3; // 1 1 1 1 0 0 1 1
+        cpu.memory.write_bytes(0x00, &[0x4A, 0x46, 0x42]);
+        cpu.memory.write_byte(0x0042, 0x01);
+
+        // One instruction should just right shift A and set the carry.
+        cpu.fetch_instruction_and_execute();
+        // 1 1 1 1 0 0 1 1 >> 1 = 0 1 1 1 1 0 0 1 = 0x79
+
+        assert_eq!(0x01, cpu.pc);
+        assert_eq!(0x79, cpu.a);
+        assert!(!cpu.processor_status.is_negative());
+        assert!(!cpu.processor_status.is_zero());
+        assert!(cpu.processor_status.is_carry());
+
+        // Now we'll right shift a value directly on the zero page at 0x42.
+        cpu.fetch_instruction_and_execute();
+
+        assert_eq!(0x03, cpu.pc);
+        assert_eq!(0x79, cpu.a);
+        assert_eq!(0x00, cpu.memory.read_byte(0x0042));
+        assert!(!cpu.processor_status.is_negative());
+        assert!(cpu.processor_status.is_zero());
+        assert!(!cpu.processor_status.is_carry());
     }
 }
