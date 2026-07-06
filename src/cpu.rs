@@ -43,6 +43,8 @@ enum Opcode {
     PHP,
     PLA,
     PLP,
+    ROL,
+    ROR,
 }
 
 pub struct Cpu {
@@ -333,6 +335,18 @@ impl Cpu {
 
             0x28 => (PLP, self.implied(), 4),
 
+            0x2A => (ROL, self.implied(), 2),
+            0x26 => (ROL, self.zero_page(), 5),
+            0x36 => (ROL, self.zero_page_x(), 6),
+            0x2E => (ROL, self.absolute(), 6),
+            0x3E => (ROL, self.absolute_x(), 7),
+
+            0x6A => (ROR, self.implied(), 2),
+            0x66 => (ROR, self.zero_page(), 5),
+            0x76 => (ROR, self.zero_page_x(), 6),
+            0x6E => (ROR, self.absolute(), 6),
+            0x7E => (ROR, self.absolute_x(), 7),
+
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
         FetchInstructionResult::new(opcode, addressing_mode, cycles)
@@ -378,7 +392,7 @@ impl Cpu {
     // Affects Flags: N, V, Z, C
     fn adc(&mut self, m: u8) {
         let extended_result = self.a as u16 + m as u16 + self.processor_status.carry() as u16;
-        let c = extended_result >> 8 & 0x0001 == 0x0001;
+        let c = (extended_result >> 8) & 0x0001 == 0x0001;
 
         let result = extended_result as u8;
 
@@ -473,7 +487,7 @@ impl Cpu {
     fn bit(&mut self, m: u8) {
         self.check_and_set_negative(m);
         println!("0x{:02X}", m);
-        if m >> 6 & 0x01 == 0x01 {
+        if (m >> 6) & 0x01 == 0x01 {
             self.processor_status = self.processor_status.set_overflow();
         } else {
             self.processor_status = self.processor_status.clear_overflow();
@@ -743,9 +757,9 @@ impl Cpu {
         let result = m >> 1;
 
         // Flags
-        self.check_and_set_carry(m & 0x80 == 0x080);
-        self.check_and_set_zero(result);
         self.processor_status = self.processor_status.clear_negative();
+        self.check_and_set_zero(result);
+        self.check_and_set_carry(m & 0x80 == 0x080);
 
         match write_location {
             WriteLocation::Accumulator => {
@@ -780,7 +794,7 @@ impl Cpu {
 
     // Pulls the accumulator from the stack
     // Affects Flags: N Z
-    fn pha(&mut self) {
+    fn pla(&mut self) {
         let a = self.pop_stack();
         self.check_and_set_negative(a);
         self.check_and_set_zero(a);
@@ -789,8 +803,50 @@ impl Cpu {
 
     // Pulls the processor status from the stack, ignoring the break flag.
     // Affects Flags: (entirely from the stack)
-    fn php(&mut self) {
+    fn plp(&mut self) {
         self.processor_status = ProcessorStatus::from(self.pop_stack()).clear_break();
+    }
+
+    // Rotate bits left for accumulator or memory location.
+    // Original 7 bit is shifted into carry and carry is shifted into bit 0.
+    // Affects Flags: N Z C
+    fn rol(&mut self, m: u8, write_location: WriteLocation) {
+        let result = (m << 1) + self.processor_status.carry();
+
+        // Flags
+        self.check_and_set_negative(result);
+        self.check_and_set_zero(result);
+        self.check_and_set_carry(m & 0x80 == 0x080);
+
+        match write_location {
+            WriteLocation::Accumulator => {
+                self.a = result
+            },
+            WriteLocation::Memory(address) => {
+                self.memory.write_byte(address, result);
+            }
+        }
+    }
+
+    // Rotate bits right for accumulator or memory location.
+    // Original 0 bit is shifted into carry and carry is shifted into bit 7.
+    // Affects Flags: N Z C
+    fn ror(&mut self, m: u8, write_location: WriteLocation) {
+        let result = (m >> 1) + (self.processor_status.carry() << 7);
+
+        // Flags
+        self.check_and_set_negative(result);
+        self.check_and_set_zero(result);
+        self.check_and_set_carry(m & 0x01 == 0x01);
+
+        match write_location {
+            WriteLocation::Accumulator => {
+                self.a = result
+            },
+            WriteLocation::Memory(address) => {
+                self.memory.write_byte(address, result);
+            }
+        }
     }
 
     // ----------- Instruction Fetching ----------- //
@@ -873,6 +929,24 @@ impl Cpu {
             Opcode::PHP => self.php(),
             Opcode::PLA => self.pla(),
             Opcode::PLP => self.plp(),
+            Opcode::ROL => {
+                // We write to memory if we returned a specific address.
+                let (data, wl) = if let Some(address) = address {
+                    (data, WriteLocation::Memory(address))
+                } else {
+                    (self.a, WriteLocation::Accumulator)
+                };
+                self.rol(data, wl);
+            },
+            Opcode::ROR => {
+                // We write to memory if we returned a specific address.
+                let (data, wl) = if let Some(address) = address {
+                    (data, WriteLocation::Memory(address))
+                } else {
+                    (self.a, WriteLocation::Accumulator)
+                };
+                self.ror(data, wl);
+            },
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -1135,5 +1209,34 @@ mod tests {
         assert_eq!(cpu.a, 0xFF);
         assert!(cpu.processor_status.is_negative());
         assert!(!cpu.processor_status.is_zero());
+    }
+
+    #[test]
+    fn test_rol_and_ror() {
+        let mut cpu = Cpu::initialize();
+        cpu.a = 0xF3; // 1 1 1 1 0 0 1 1
+        cpu.memory.write_bytes(0x00, &[0x6A, 0x26, 0x42]);
+        cpu.memory.write_byte(0x0042, 0x7F);
+
+        // One instruction should just rotate A to the right and set the carry.
+        cpu.fetch_instruction_and_execute();
+        // 1 1 1 1 0 0 1 1 >> 1 = 0 1 1 1 1 0 0 1 = 0x79
+
+        assert_eq!(0x01, cpu.pc);
+        assert_eq!(0x79, cpu.a);
+        assert!(!cpu.processor_status.is_negative());
+        assert!(!cpu.processor_status.is_zero());
+        assert!(cpu.processor_status.is_carry());
+
+        // Now we'll left rotate a value directly on the zero page at 0x42. The carry is set!
+        // 0 1 1 1 1 1 1 1 << 1 + 1
+        cpu.fetch_instruction_and_execute();
+
+        assert_eq!(0x03, cpu.pc);
+        assert_eq!(0x79, cpu.a);
+        assert_eq!(0xFF, cpu.memory.read_byte(0x0042));
+        assert!(cpu.processor_status.is_negative());
+        assert!(!cpu.processor_status.is_zero());
+        assert!(!cpu.processor_status.is_carry());
     }
 }
