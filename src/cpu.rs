@@ -45,6 +45,8 @@ enum Opcode {
     PLP,
     ROL,
     ROR,
+    RTI,
+    RTS,
 }
 
 pub struct Cpu {
@@ -98,9 +100,14 @@ impl Cpu {
         self.sp = self.sp.wrapping_sub(1);
     }
 
-    fn pop_stack(&mut self) -> u8 {
+    fn pull_stack(&mut self) -> u8 {
         self.sp = self.sp.wrapping_add(1);
         self.memory.read_byte_from_stack(self.sp)
+    }
+
+    // Pulls an address from the stack: first $LL then $HH
+    fn pull_address(&mut self) -> u16 {
+        u16::from_le_bytes([self.pull_stack(), self.pull_stack()])
     }
 
     // Gets a byte and increments the program counter.
@@ -347,6 +354,10 @@ impl Cpu {
             0x6E => (ROR, self.absolute(), 6),
             0x7E => (ROR, self.absolute_x(), 7),
 
+            0x40 => (RTI, self.implied(), 6),
+
+            0x60 => (RTS, self.implied(), 6),
+
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
         FetchInstructionResult::new(opcode, addressing_mode, cycles)
@@ -541,9 +552,9 @@ impl Cpu {
     fn brk(&mut self) {
         self.processor_status = self.processor_status.set_break();
         let return_address = self.pc.wrapping_add(1);
-        // Little Endian, push $LL, then $HH.
-        self.push_stack(return_address as u8);
+        // Little Endian, push $HH, then $LL.
         self.push_stack((return_address >> 8) as u8);
+        self.push_stack(return_address as u8);
         self.push_stack(self.processor_status.into());
     }
 
@@ -716,10 +727,10 @@ impl Cpu {
     // PC <- $HHLL
     // Affects Flags: (none)
     fn jsr(&mut self, address: u16) {
-        // Little Endian: push the $LL, then $HH so that RTI can pull properly.
+        // Little Endian: push the $HH, then $LL so that RTI can pull properly.
         let return_address = self.pc.wrapping_sub(1);
-        self.push_stack(return_address as u8);
         self.push_stack((return_address >> 8) as u8);
+        self.push_stack(return_address as u8);
         self.pc = address;
     }
 
@@ -795,7 +806,7 @@ impl Cpu {
     // Pulls the accumulator from the stack
     // Affects Flags: N Z
     fn pla(&mut self) {
-        let a = self.pop_stack();
+        let a = self.pull_stack();
         self.check_and_set_negative(a);
         self.check_and_set_zero(a);
         self.a = a;
@@ -804,7 +815,7 @@ impl Cpu {
     // Pulls the processor status from the stack, ignoring the break flag.
     // Affects Flags: (entirely from the stack)
     fn plp(&mut self) {
-        self.processor_status = ProcessorStatus::from(self.pop_stack()).clear_break();
+        self.processor_status = ProcessorStatus::from(self.pull_stack()).clear_break();
     }
 
     // Rotate bits left for accumulator or memory location.
@@ -847,6 +858,21 @@ impl Cpu {
                 self.memory.write_byte(address, result);
             }
         }
+    }
+
+    // Return from Interrupt
+    // Pull SR, pull PC
+    // Affects Flags: (whatever you pull for status register)
+    fn rti(&mut self) {
+        self.processor_status = ProcessorStatus::from(self.pull_stack()).clear_break();
+        self.pc = self.pull_address();
+    }
+
+    // Return from Subroutine
+    // pull PC (but it's stored as PC - 1, so increment it once).
+    // Affects Flags: (none)
+    fn rts(&mut self) {
+        self.pc = self.pull_address().wrapping_add(1);
     }
 
     // ----------- Instruction Fetching ----------- //
@@ -947,6 +973,8 @@ impl Cpu {
                 };
                 self.ror(data, wl);
             },
+            Opcode::RTI => self.rti(),
+            Opcode::RTS => self.rts(),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -1238,5 +1266,42 @@ mod tests {
         assert!(cpu.processor_status.is_negative());
         assert!(!cpu.processor_status.is_zero());
         assert!(!cpu.processor_status.is_carry());
+    }
+
+    #[test]
+    fn test_rti() {
+        let mut cpu = Cpu::initialize();
+        cpu.memory.write_byte(0x00, 0x40);
+        // Write to the stack directly like a maniac (as if we had done a BRK).
+        cpu.push_stack(0x12);
+        cpu.push_stack(0x34);
+        cpu.push_stack(0xD8); // 1 1 0 1 1 0 0 0
+
+        cpu.fetch_instruction_and_execute();
+
+        assert_eq!(cpu.processor_status.into(), 0xC8); // Break is cleared
+        assert_eq!(cpu.pc, 0x1234);
+    }
+
+    #[test]
+    fn test_rts() {
+        let mut cpu = Cpu::initialize();
+        // Jump to a subroutine where we load X, then come back and load the accumulator.
+        // JSR #0x1234; LDA #0x42;
+        cpu.memory.write_bytes(0x00, &[0x20, 0x34, 0x12, 0xA9, 0x42]);
+        // LDX, #0xFF; RTI;
+        cpu.memory.write_bytes(0x1234, &[0xA2, 0xFF, 0x60]);
+
+        // Execute the four instructions.
+        cpu.fetch_instruction_and_execute();
+        cpu.fetch_instruction_and_execute();
+        cpu.fetch_instruction_and_execute();
+        cpu.fetch_instruction_and_execute();
+
+        assert_eq!(cpu.pc, 0x05);
+        assert_eq!(cpu.a, 0x42);
+        assert_eq!(cpu.x, 0xFF);
+        // Cycles for a JSR, LDA, RTI, and LDA
+        assert_eq!(cpu.cycle_count, 6 + 2 + 6 + 2);
     }
 }
