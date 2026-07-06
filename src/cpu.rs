@@ -39,6 +39,10 @@ enum Opcode {
     LSR,
     NOP,
     ORA,
+    PHA,
+    PHP,
+    PLA,
+    PLP,
 }
 
 pub struct Cpu {
@@ -320,6 +324,14 @@ impl Cpu {
             0x19 => (ORA, self.absolute_y(), 4),
             0x01 => (ORA, self.indirect_zero_page_x(), 6),
             0x11 => (ORA, self.indirect_zero_page_y(), 5),
+
+            0x48 => (PHA, self.implied(), 3),
+
+            0x08 => (PHP, self.implied(), 3),
+
+            0x68 => (PLA, self.implied(), 4),
+
+            0x28 => (PLP, self.implied(), 4),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -754,6 +766,33 @@ impl Cpu {
         self.check_and_set_zero(self.a);
     }
 
+    // Push the accumulator onto the stack
+    // Affects Flags: (none)
+    fn pha(&mut self) {
+        self.push_stack(self.a);
+    }
+
+    // Push the processor status onto the stack
+    // Affects Flags: (none)
+    fn php(&mut self) {
+        self.push_stack(self.processor_status.into());
+    }
+
+    // Pulls the accumulator from the stack
+    // Affects Flags: N Z
+    fn pha(&mut self) {
+        let a = self.pop_stack();
+        self.check_and_set_negative(a);
+        self.check_and_set_zero(a);
+        self.a = a;
+    }
+
+    // Pulls the processor status from the stack, ignoring the break flag.
+    // Affects Flags: (entirely from the stack)
+    fn php(&mut self) {
+        self.processor_status = ProcessorStatus::from(self.pop_stack()).clear_break();
+    }
+
     // ----------- Instruction Fetching ----------- //
 
     // A bit of a hack to deal with the variability of branch cycles.
@@ -830,6 +869,10 @@ impl Cpu {
             },
             Opcode::NOP => {}, // an actual noop
             Opcode::ORA => self.ora(data),
+            Opcode::PHA => self.pha(),
+            Opcode::PHP => self.php(),
+            Opcode::PLA => self.pla(),
+            Opcode::PLP => self.plp(),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
