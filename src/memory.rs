@@ -101,6 +101,17 @@ impl CpuMemory {
     }
 
     // Returns two bytes assuming little endian. So the bytes
+    // come back $HHLL even though they're *read* as LLHH.
+    //
+    // Note this wraps around the current *page*.
+    pub fn read_two_bytes_wrapping_page(&self, address: u16) -> u16 {
+        u16::from_le_bytes([
+            self.read_byte(address),
+            self.read_byte((address & 0xFF00) + ((address as u8).wrapping_add(1) as u16)),
+        ])
+    }
+
+    // Returns two bytes assuming little endian. So the bytes
     // come back $HHLL even though they're *read* as LLHH. Add
     // wraps around the Zero Page.
     pub fn read_two_bytes_zero_page(&self, address: u8) -> u16 {

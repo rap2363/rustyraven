@@ -34,6 +34,7 @@ enum Opcode {
     INC,
     INX,
     INY,
+    JMP,
 }
 
 pub struct Cpu {
@@ -108,6 +109,16 @@ impl Cpu {
         two_bytes
     }
 
+    // Fetches two byte $LL and $HH and increments the program counter twice
+    // returning the u16 as $HHLL
+    // Note: This one will *wrap* around the existing page.
+    fn fetch_next_two_bytes_wrapping_page(&mut self) -> u16 {
+        let two_bytes = self.memory.read_two_bytes_wrapping_page(self.pc);
+        self.increment_pc();
+        self.increment_pc();
+        two_bytes
+    }
+
     fn implied(&mut self) -> AddressingMode {
         // Note we do not increment the PC because we don't need to fetch a new byte!
         AddressingMode::Implied
@@ -147,6 +158,11 @@ impl Cpu {
 
     fn indirect_zero_page_y(&mut self) -> AddressingMode {
         AddressingMode::IndirectZeroPageY(self.fetch_next_byte())
+    }
+
+    // Used *exclusively* for the JMP Indirect mode (0x6C).
+    fn indirect(&mut self) -> AddressingMode {
+        AddressingMode::Indirect(self.fetch_next_two_bytes())
     }
 
     fn relative(&mut self) -> AddressingMode {
@@ -257,6 +273,9 @@ impl Cpu {
             0xE8 => (INX, self.implied(), 2),
 
             0xC8 => (INY, self.implied(), 2),
+
+            0x4C => (JMP, self.absolute(), 3),
+            0x6C => (JMP, self.indirect(), 5),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -614,6 +633,13 @@ impl Cpu {
         self.check_and_set_zero(self.y);
     }
 
+    // Jump to a new location
+    // PC <- $HHLL
+    // Affects Flags: (none)
+    fn jmp(&mut self, address: u16) {
+        self.pc = address;
+    }
+
     // ----------- Instruction Fetching ----------- //
 
     // A bit of a hack to deal with the variability of branch cycles.
@@ -674,6 +700,7 @@ impl Cpu {
             Opcode::INC => self.dec(data, address.expect("Address should be supplied for a INC!")),
             Opcode::INX => self.dex(),
             Opcode::INY => self.dey(),
+            Opcode::JMP => self.jmp(address.expect("Address should have been supplied for a JMP!")),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -840,5 +867,29 @@ mod tests {
         assert!(!cpu.processor_status.is_zero());
         assert_eq!(cpu.memory.read_byte(0x0042), 0xFF);
         assert_eq!(16, cpu.cycle_count);
+    }
+
+    #[test]
+    fn test_jmp() {
+        let mut cpu = Cpu::initialize();
+        cpu.memory.write_bytes(0x00, &[0x4C, 0x34, 0x12]);
+
+        cpu.fetch_instruction_and_execute();
+        assert_eq!(cpu.pc, 0x1234);
+        assert_eq!(3, cpu.cycle_count);
+    }
+
+    #[test]
+    fn test_jmp_indirect() {
+        let mut cpu = Cpu::initialize();
+        cpu.memory.write_bytes(0x00, &[0x6C, 0xFF, 0x11]);
+        cpu.memory.write_byte(0x11FF, 0x34);
+        cpu.memory.write_byte(0x1100, 0x12);
+        cpu.memory.write_byte(0x1234, 0xEF);
+        cpu.memory.write_byte(0x1235, 0xBE);
+        cpu.fetch_instruction_and_execute();
+
+        assert_eq!(cpu.pc, 0xBEEF);
+        assert_eq!(5, cpu.cycle_count);
     }
 }
