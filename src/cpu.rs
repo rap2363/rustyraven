@@ -54,6 +54,12 @@ enum Opcode {
     STA,
     STX,
     STY,
+    TAX,
+    TAY,
+    TSX,
+    TXA,
+    TXS,
+    TYA,
 }
 
 pub struct Cpu {
@@ -395,6 +401,13 @@ impl Cpu {
             0x84 => (STY, self.zero_page(), 3),
             0x94 => (STY, self.zero_page_x(), 4),
             0x8C => (STY, self.absolute(), 4),
+
+            0xAA => (TAX, self.implied(), 2),
+            0xA8 => (TAY, self.implied(), 2),
+            0xBA => (TSX, self.implied(), 2),
+            0x8A => (TXA, self.implied(), 2),
+            0x9A => (TXS, self.implied(), 2),
+            0x09 => (TYA, self.implied(), 2),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -967,6 +980,58 @@ impl Cpu {
         self.memory.write_byte(address, self.y);
     }
 
+    // Transfer accumulator to X
+    // X <- A
+    // Affects flags: N Z
+    fn tax(&mut self) {
+        self.x = self.a;
+        self.check_and_set_negative(self.x);
+        self.check_and_set_zero(self.x);
+    }
+
+    // Transfer accumulator to Y
+    // Y <- A
+    // Affects flags: N Z
+    fn tay(&mut self) {
+        self.y = self.a;
+        self.check_and_set_negative(self.y);
+        self.check_and_set_zero(self.y);
+    }
+
+    // Transfer stack pointer to X
+    // X <- SP
+    // Affects flags: N Z
+    fn tsx(&mut self) {
+        self.x = self.sp;
+        self.check_and_set_negative(self.x);
+        self.check_and_set_zero(self.x);
+    }
+
+    // Transfer X to A
+    // A <- X
+    // Affects flags: N Z
+    fn txa(&mut self) {
+        self.a = self.x;
+        self.check_and_set_negative(self.a);
+        self.check_and_set_zero(self.a);
+    }
+
+    // Transfer X to stack pointer
+    // SP <- X
+    // Affects flags: (none)
+    fn txs(&mut self) {
+        self.sp = self.x;
+    }
+
+    // Transfer Y to A
+    // A <- Y
+    // Affects flags: N Z
+    fn tya(&mut self) {
+        self.a = self.y;
+        self.check_and_set_negative(self.a);
+        self.check_and_set_zero(self.a);
+    }
+
     // ----------- Instruction Fetching ----------- //
 
     // A bit of a hack to deal with the variability of branch cycles.
@@ -1074,6 +1139,12 @@ impl Cpu {
             Opcode::STA => self.sta(address.expect("Address should have been supplied for a STA!")),
             Opcode::STX => self.sta(address.expect("Address should have been supplied for a STX!")),
             Opcode::STY => self.sta(address.expect("Address should have been supplied for a STY!")),
+            Opcode::TAX => self.tax(),
+            Opcode::TAY => self.tay(),
+            Opcode::TSX => self.tsx(),
+            Opcode::TXA => self.txa(),
+            Opcode::TXS => self.txs(),
+            Opcode::TYA => self.tya(),
             x => todo!("Unimplemented Opcode {:?}", x),
         }
 
@@ -1189,8 +1260,8 @@ mod tests {
         assert!(cpu.processor_status.is_break());
         assert_eq!(7, cpu.cycle_count);
         assert_eq!(0xFC, cpu.sp);
-        assert_eq!(0x02, cpu.memory.read_byte(0x10FF));
-        assert_eq!(0x00, cpu.memory.read_byte(0x10FE));
+        assert_eq!(0x00, cpu.memory.read_byte(0x10FF));
+        assert_eq!(0x02, cpu.memory.read_byte(0x10FE));
         assert_eq!(0x52, cpu.memory.read_byte(0x10FD));
     }
 
@@ -1276,8 +1347,8 @@ mod tests {
         cpu.fetch_instruction_and_execute();
         assert_eq!(cpu.pc, 0xBEEF);
         assert_eq!(cpu.cycle_count, 6);
-        assert_eq!(0x36, cpu.memory.read_byte(0x10FF));
-        assert_eq!(0x12, cpu.memory.read_byte(0x10FE));
+        assert_eq!(0x12, cpu.memory.read_byte(0x10FF));
+        assert_eq!(0x36, cpu.memory.read_byte(0x10FE));
     }
 
     #[test]
@@ -1427,5 +1498,18 @@ mod tests {
 
         cpu.fetch_instruction_and_execute();
         assert_eq!(cpu.memory.read_byte(0x1234), 0x42);
+    }
+
+    #[test]
+    fn test_tax() {
+        let mut cpu = Cpu::initialize();
+        cpu.a = 0xF2;
+        cpu.memory.write_bytes(0x00, &[0xAA, 0x9A]);
+
+        cpu.fetch_instruction_and_execute();
+        cpu.fetch_instruction_and_execute();
+
+        assert_eq!(cpu.x, 0xF2);
+        assert_eq!(cpu.sp, 0xF2);
     }
 }
