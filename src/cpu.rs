@@ -96,7 +96,7 @@ impl Cpu {
             memory: CpuMemory::initialize(),
             processor_status: ProcessorStatus::initialize(),
             pc: 0,
-            sp: 0xFF,
+            sp: 0xFD,
             a: 0,
             x: 0,
             y: 0,
@@ -427,9 +427,9 @@ impl Cpu {
         let s_x = x as i8;
         let s_y = y as i8;
         let s_sum = sum as i8;
-        self.processor_status = if s_x > 0 && s_y > 0 && s_sum < 0 {
+        self.processor_status = if s_x >= 0 && s_y >= 0 && s_sum < 0 {
             self.processor_status.set_overflow()
-        } else if s_x < 0 && s_y < 0 && s_sum > 0 {
+        } else if s_x <= 0 && s_y <= 0 && s_sum > 0 {
             self.processor_status.set_overflow()
         } else {
             self.processor_status.clear_overflow()
@@ -666,15 +666,29 @@ impl Cpu {
         self.processor_status = self.processor_status.clear_overflow();
     }
 
-    // Helper method for the cmp ops. Compares a and b.
-    fn cmp_processor_status(&self, a: u8, b: u8) -> ProcessorStatus {
-        if a > b {
-            self.processor_status.set_carry().clear_negative().clear_zero()
-        } else if a < b {
-            self.processor_status.set_negative().clear_carry().clear_zero()
+    // Helper method for the cmp ops. Subtracts b from a and then:
+    // 1. Sets carry flag if a >= b (unsigned)
+    // 2. Sets negative if the subtraction is negative
+    // 3. Sets zero if the subtraction is 0.
+    fn cmp_processor_status(&mut self, a: u8, b: u8) {
+        let subtraction = a.wrapping_sub(b);
+        if a >= b {
+            self.processor_status = self.processor_status.set_carry()
         } else {
-            self.processor_status.set_zero().set_carry().clear_negative()
-        }
+            self.processor_status = self.processor_status.clear_carry();
+        };
+
+        if (subtraction & 0x80) == 0x80 {
+            self.processor_status = self.processor_status.set_negative();
+        } else {
+            self.processor_status = self.processor_status.clear_negative();
+        };
+
+        if subtraction == 0 {
+            self.processor_status = self.processor_status.set_zero();
+        } else {
+            self.processor_status = self.processor_status.clear_zero();
+        };
     }
 
     // Compare accumulator to memory (this *only* sets flags based on the value of A - M).
@@ -682,7 +696,7 @@ impl Cpu {
     // A - M
     // Affects Flags: N Z C
     fn cmp(&mut self, m: u8) {
-        self.processor_status = self.cmp_processor_status(self.a, m);
+        self.cmp_processor_status(self.a, m);
     }
 
     // Compare X register to memory (this *only* sets flags based on the value of X - M).
@@ -690,7 +704,7 @@ impl Cpu {
     // X - M
     // Affects Flags: N Z C
     fn cpx(&mut self, m: u8) {
-        self.processor_status = self.cmp_processor_status(self.x, m);
+        self.cmp_processor_status(self.x, m);
     }
 
     // Compare accumulator to memory (this *only* sets flags based on the value of Y - M).
@@ -698,7 +712,7 @@ impl Cpu {
     // Y - M
     // Affects Flags: N Z C
     fn cpy(&mut self, m: u8) {
-        self.processor_status = self.cmp_processor_status(self.y, m);
+        self.cmp_processor_status(self.y, m);
     }
 
     // Decrement memory by one. Requires us to *write* to a location in memory.
@@ -1092,9 +1106,9 @@ impl Cpu {
             Opcode::DEX => self.dex(),
             Opcode::DEY => self.dey(),
             Opcode::EOR => self.eor(data),
-            Opcode::INC => self.dec(data, address.expect("Address should be supplied for a INC!")),
-            Opcode::INX => self.dex(),
-            Opcode::INY => self.dey(),
+            Opcode::INC => self.inc(data, address.expect("Address should be supplied for a INC!")),
+            Opcode::INX => self.inx(),
+            Opcode::INY => self.iny(),
             Opcode::JMP => self.jmp(address.expect("Address should have been supplied for a JMP!")),
             Opcode::JSR => self.jsr(address.expect("Address should have been supplied for a JSR!")),
             Opcode::LDA => self.lda(data),
@@ -1140,8 +1154,8 @@ impl Cpu {
             Opcode::SED => self.sed(),
             Opcode::SEI => self.sei(),
             Opcode::STA => self.sta(address.expect("Address should have been supplied for a STA!")),
-            Opcode::STX => self.sta(address.expect("Address should have been supplied for a STX!")),
-            Opcode::STY => self.sta(address.expect("Address should have been supplied for a STY!")),
+            Opcode::STX => self.stx(address.expect("Address should have been supplied for a STX!")),
+            Opcode::STY => self.sty(address.expect("Address should have been supplied for a STY!")),
             Opcode::TAX => self.tax(),
             Opcode::TAY => self.tay(),
             Opcode::TSX => self.tsx(),

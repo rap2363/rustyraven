@@ -38,11 +38,11 @@ impl CpuMemory {
     }
 
     pub fn write_byte_to_stack(&mut self, sp: u8, value: u8) {
-        self.write_byte(0x1000 + (sp as u16), value);
+        self.write_byte(0x0100 + (sp as u16), value);
     }
 
     pub fn read_byte_from_stack(&self, sp: u8) -> u8 {
-        self.read_byte(0x1000 + (sp as u16))
+        self.read_byte(0x0100 + (sp as u16))
     }
 
     pub fn write_byte(&mut self, address: u16, value: u8) {

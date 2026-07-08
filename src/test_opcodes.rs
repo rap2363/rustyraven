@@ -142,7 +142,7 @@ impl LogLine {
 
 #[derive(Debug)]
 struct NesLog {
-    pub lines: Vec<LogLine>,
+    pub lines: Vec<(String, LogLine)>,
 }
 
 impl NesLog {
@@ -150,7 +150,7 @@ impl NesLog {
         let mut lines = Vec::new();
 
         for line in read_to_string(filepath).unwrap().lines() {
-            lines.push(LogLine::from(line));
+            lines.push((line.to_string(), LogLine::from(line)));
         }
 
         Ok(Self { lines })
@@ -168,17 +168,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // NROM means we write it to the lower and upper banks.
     cpu.memory.write_bytes(0xC000, &nes_rom.prg_rom_data);
     cpu.pc = 0xC000;
-    cpu.sp = 0xFD; // not sure why...
 
     // Now we will loop and test instructions, ensuring our log is matched each time.
     let mut i = 0;
     loop {
         let expected_log_line = &nes_log.lines[i];
+        println!("{}", expected_log_line.0);
         let current_log_line = LogLine::from_cpu(&cpu);
-        if *expected_log_line != current_log_line {
+        if expected_log_line.1 != current_log_line {
             println!("Mismatch at line {}", i + 1);
-            println!("Expected: {}", expected_log_line.to_string());
-            println!("Actual: {}", current_log_line.to_string());
+            println!("Exp: {}", expected_log_line.1.to_string());
+            println!("You: {}", current_log_line.to_string());
             break;
         }
         i += 1;
