@@ -173,7 +173,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut i = 0;
     loop {
         let expected_log_line = &nes_log.lines[i];
-        println!("{}", expected_log_line.0);
+        println!("{i}: {}", expected_log_line.0);
         let current_log_line = LogLine::from_cpu(&cpu);
         if expected_log_line.1 != current_log_line {
             println!("Mismatch at line {}", i + 1);

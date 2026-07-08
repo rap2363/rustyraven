@@ -336,7 +336,35 @@ impl Cpu {
             0x4E => (LSR, self.absolute(), 6),
             0x5E => (LSR, self.absolute_x(), 7),
 
+            // A ton of NOOP's
             0xEA => (NOP, self.implied(), 2),
+            0x1A => (NOP, self.implied(), 2),
+            0x3A => (NOP, self.implied(), 2),
+            0x5A => (NOP, self.implied(), 2),
+            0x7A => (NOP, self.implied(), 2),
+            0xDA => (NOP, self.implied(), 2),
+            0xFA => (NOP, self.implied(), 2),
+            0x80 => (NOP, self.immediate(), 2),
+            0x82 => (NOP, self.immediate(), 2),
+            0x89 => (NOP, self.immediate(), 2),
+            0xC2 => (NOP, self.immediate(), 2),
+            0xE2 => (NOP, self.immediate(), 2),
+            0x04 => (NOP, self.zero_page(), 3),
+            0x44 => (NOP, self.zero_page(), 3),
+            0x64 => (NOP, self.zero_page(), 3),
+            0x14 => (NOP, self.zero_page_x(), 4),
+            0x34 => (NOP, self.zero_page_x(), 4),
+            0x54 => (NOP, self.zero_page_x(), 4),
+            0x74 => (NOP, self.zero_page_x(), 4),
+            0xD4 => (NOP, self.zero_page_x(), 4),
+            0xF4 => (NOP, self.zero_page_x(), 4),
+            0x0C => (NOP, self.absolute(), 4),
+            0x1C => (NOP, self.absolute_x(), 4),
+            0x3C => (NOP, self.absolute_x(), 4),
+            0x5C => (NOP, self.absolute_x(), 4),
+            0x7C => (NOP, self.absolute_x(), 4),
+            0xDC => (NOP, self.absolute_x(), 4),
+            0xFC => (NOP, self.absolute_x(), 4),
 
             0x09 => (ORA, self.immediate(), 2),
             0x05 => (ORA, self.zero_page(), 3),
@@ -453,6 +481,11 @@ impl Cpu {
         }
     }
 
+    fn branch_offset(&mut self, offset: u8) {
+        // Treat the offset as signed and add it to the PC (wrapping if necessary).
+        self.pc = (self.pc & 0xFF00) + (((self.pc as u8).wrapping_add(offset)) as u16);
+    }
+
     // Add With Carry
     // A <- A + M + C
     // Affects Flags: N, V, Z, C
@@ -512,7 +545,7 @@ impl Cpu {
     // Returns a bool for whether or not we branch.
     fn bcc(&mut self, m: u8) -> bool {
         if !self.processor_status.is_carry() {
-            self.pc = self.pc.wrapping_add(m as u16);
+            self.branch_offset(m);
             true
         } else {
             false
@@ -525,7 +558,7 @@ impl Cpu {
     // Returns a bool for whether or not we branch.
     fn bcs(&mut self, m: u8) -> bool {
         if self.processor_status.is_carry() {
-            self.pc = self.pc.wrapping_add(m as u16);
+            self.branch_offset(m);
             true
         } else {
             false
@@ -538,7 +571,7 @@ impl Cpu {
     // Returns a bool for whether or not we branch.
     fn beq(&mut self, m: u8) -> bool {
         if self.processor_status.is_zero() {
-            self.pc = self.pc.wrapping_add(m as u16);
+            self.branch_offset(m);
             true
         } else {
             false
@@ -566,7 +599,7 @@ impl Cpu {
     // Returns a bool for whether or not we branch.
     fn bmi(&mut self, m: u8) -> bool {
         if self.processor_status.is_negative() {
-            self.pc = self.pc.wrapping_add(m as u16);
+            self.branch_offset(m);
             true
         } else {
             false
@@ -579,7 +612,7 @@ impl Cpu {
     // Returns a bool for whether or not we branch.
     fn bne(&mut self, m: u8) -> bool {
         if !self.processor_status.is_zero() {
-            self.pc = self.pc.wrapping_add(m as u16);
+            self.branch_offset(m);
             true
         } else {
             false
@@ -592,7 +625,7 @@ impl Cpu {
     // Returns a bool for whether or not we branch.
     fn bpl(&mut self, m: u8) -> bool {
         if !self.processor_status.is_negative() {
-            self.pc = self.pc.wrapping_add(m as u16);
+            self.branch_offset(m);
             true
         } else {
             false
@@ -618,7 +651,7 @@ impl Cpu {
     // Returns a bool for whether or not we branch.
     fn bvc(&mut self, m: u8) -> bool {
         if !self.processor_status.is_overflow() {
-            self.pc = self.pc.wrapping_add(m as u16);
+            self.branch_offset(m);
             true
         } else {
             false
@@ -631,7 +664,7 @@ impl Cpu {
     // Returns a bool for whether or not we branch.
     fn bvs(&mut self, m: u8) -> bool {
         if self.processor_status.is_overflow() {
-            self.pc = self.pc.wrapping_add(m as u16);
+            self.branch_offset(m);
             true
         } else {
             false
