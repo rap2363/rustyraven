@@ -838,7 +838,7 @@ impl Cpu {
         // Flags
         self.processor_status = self.processor_status.clear_negative();
         self.check_and_set_zero(result);
-        self.check_and_set_carry(m & 0x80 == 0x080);
+        self.check_and_set_carry(m & 0x01 == 0x01);
 
         match write_location {
             WriteLocation::Accumulator => {
@@ -1275,10 +1275,10 @@ mod tests {
         assert_eq!(0x01, cpu.pc);
         assert!(cpu.processor_status.is_break());
         assert_eq!(7, cpu.cycle_count);
-        assert_eq!(0xFC, cpu.sp);
-        assert_eq!(0x00, cpu.memory.read_byte(0x10FF));
-        assert_eq!(0x02, cpu.memory.read_byte(0x10FE));
-        assert_eq!(0x72, cpu.memory.read_byte(0x10FD));
+        assert_eq!(0xFA, cpu.sp);
+        assert_eq!(0x00, cpu.memory.read_byte(0x01FD));
+        assert_eq!(0x02, cpu.memory.read_byte(0x01FC));
+        assert_eq!(0x72, cpu.memory.read_byte(0x01FB));
     }
 
     #[test]
@@ -1345,11 +1345,9 @@ mod tests {
         cpu.memory.write_bytes(0x00, &[0x6C, 0xFF, 0x11]);
         cpu.memory.write_byte(0x11FF, 0x34);
         cpu.memory.write_byte(0x1100, 0x12);
-        cpu.memory.write_byte(0x1234, 0xEF);
-        cpu.memory.write_byte(0x1235, 0xBE);
         cpu.fetch_instruction_and_execute();
 
-        assert_eq!(cpu.pc, 0xBEEF);
+        assert_eq!(cpu.pc, 0x1234);
         assert_eq!(5, cpu.cycle_count);
     }
 
@@ -1363,8 +1361,9 @@ mod tests {
         cpu.fetch_instruction_and_execute();
         assert_eq!(cpu.pc, 0xBEEF);
         assert_eq!(cpu.cycle_count, 6);
-        assert_eq!(0x12, cpu.memory.read_byte(0x10FF));
-        assert_eq!(0x36, cpu.memory.read_byte(0x10FE));
+        // Reading directly from the stack
+        assert_eq!(0x12, cpu.memory.read_byte(0x01FD));
+        assert_eq!(0x36, cpu.memory.read_byte(0x01FC));
     }
 
     #[test]
@@ -1403,7 +1402,7 @@ mod tests {
         assert_eq!(0x00, cpu.memory.read_byte(0x0042));
         assert!(!cpu.processor_status.is_negative());
         assert!(cpu.processor_status.is_zero());
-        assert!(!cpu.processor_status.is_carry());
+        assert!(cpu.processor_status.is_carry());
     }
 
     #[test]

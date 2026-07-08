@@ -72,8 +72,7 @@ impl AddressingMode {
             },
             Self::Indirect(address) => {
                 let ptr_address = cpu.memory.read_two_bytes_wrapping_page(address);
-                let next_ptr_address = cpu.memory.read_two_bytes(ptr_address);
-                AddressingModeData::new(0x00, Some(next_ptr_address), PageBoundaryResult::Irrelevant)
+                AddressingModeData::new(0x00, Some(ptr_address), PageBoundaryResult::Irrelevant)
             },
             Self::IndirectZeroPageX(address) => {
                 let ptr_address = cpu.memory.read_two_bytes_zero_page(address.wrapping_add(cpu.x));
