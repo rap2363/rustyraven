@@ -1,3 +1,4 @@
+use crate::addressing_modes::PageBoundaryResult;
 use crate::addressing_modes::{AddressingMode, AddressingModeData, PageBoundaryResult::PageBoundaryCrossed};
 use crate::memory::CpuMemory;
 use crate::processor_status::ProcessorStatus;
@@ -73,10 +74,14 @@ pub struct Cpu {
     pub cycle_count: usize,
 }
 
+enum Cycles {
+    Fixed(usize),
+    PageCrossing(usize),
+}
 pub struct FetchInstructionResult {
     opcode: Opcode,
     addressing_mode: AddressingMode,
-    cycles: usize,
+    cycles: Cycles,
 }
 
 enum WriteLocation {
@@ -85,7 +90,7 @@ enum WriteLocation {
 }
 
 impl FetchInstructionResult {
-    fn new(opcode: Opcode, addressing_mode: AddressingMode, cycles: usize) -> Self {
+    fn new(opcode: Opcode, addressing_mode: AddressingMode, cycles: Cycles) -> Self {
         Self { opcode, addressing_mode, cycles }
     }
 }
@@ -206,236 +211,236 @@ impl Cpu {
         let opcode_byte = self.fetch_next_byte();
         use Opcode::*;
         let (opcode, addressing_mode, cycles) = match opcode_byte {
-            0x69 => (ADC, self.immediate(), 2),
-            0x65 => (ADC, self.zero_page(), 3),
-            0x75 => (ADC, self.zero_page_x(), 4),
-            0x6D => (ADC, self.absolute(), 4),
-            0x7D => (ADC, self.absolute_x(), 4),
-            0x79 => (ADC, self.absolute_y(), 4),
-            0x61 => (ADC, self.indirect_zero_page_x(), 6),
-            0x71 => (ADC, self.indirect_zero_page_y(), 5),
+            0x69 => (ADC, self.immediate(), Cycles::Fixed(2)),
+            0x65 => (ADC, self.zero_page(), Cycles::Fixed(3)),
+            0x75 => (ADC, self.zero_page_x(), Cycles::Fixed(4)),
+            0x6D => (ADC, self.absolute(), Cycles::Fixed(4)),
+            0x7D => (ADC, self.absolute_x(), Cycles::PageCrossing(4)),
+            0x79 => (ADC, self.absolute_y(), Cycles::PageCrossing(4)),
+            0x61 => (ADC, self.indirect_zero_page_x(), Cycles::Fixed(6)),
+            0x71 => (ADC, self.indirect_zero_page_y(), Cycles::PageCrossing(5)),
 
-            0x29 => (AND, self.immediate(), 2),
-            0x25 => (AND, self.zero_page(), 3),
-            0x35 => (AND, self.zero_page_x(), 4),
-            0x2D => (AND, self.absolute(), 4),
-            0x3D => (AND, self.absolute_x(), 4),
-            0x39 => (AND, self.absolute_y(), 4),
-            0x21 => (AND, self.indirect_zero_page_x(), 6),
-            0x31 => (AND, self.indirect_zero_page_y(), 5),
+            0x29 => (AND, self.immediate(), Cycles::Fixed(2)),
+            0x25 => (AND, self.zero_page(), Cycles::Fixed(3)),
+            0x35 => (AND, self.zero_page_x(), Cycles::Fixed(4)),
+            0x2D => (AND, self.absolute(), Cycles::Fixed(4)),
+            0x3D => (AND, self.absolute_x(), Cycles::PageCrossing(4)),
+            0x39 => (AND, self.absolute_y(), Cycles::PageCrossing(4)),
+            0x21 => (AND, self.indirect_zero_page_x(), Cycles::Fixed(6)),
+            0x31 => (AND, self.indirect_zero_page_y(), Cycles::PageCrossing(5)),
 
-            0x0A => (ASL, self.implied(), 2),
-            0x06 => (ASL, self.zero_page(), 5),
-            0x16 => (ASL, self.zero_page_x(), 6),
-            0x0E => (ASL, self.absolute(), 6),
-            0x1E => (ASL, self.absolute_x(), 7),
+            0x0A => (ASL, self.implied(), Cycles::Fixed(2)),
+            0x06 => (ASL, self.zero_page(), Cycles::Fixed(5)),
+            0x16 => (ASL, self.zero_page_x(), Cycles::Fixed(6)),
+            0x0E => (ASL, self.absolute(), Cycles::Fixed(6)),
+            0x1E => (ASL, self.absolute_x(), Cycles::Fixed(7)),
 
-            0x90 => (BCC, self.relative(), 2),
+            0x90 => (BCC, self.relative(), Cycles::Fixed(2)),
 
-            0xB0 => (BCS, self.relative(), 2),
+            0xB0 => (BCS, self.relative(), Cycles::Fixed(2)),
             
-            0xF0 => (BEQ, self.relative(), 2),
+            0xF0 => (BEQ, self.relative(), Cycles::Fixed(2)),
 
-            0x24 => (BIT, self.zero_page(), 3),
-            0x2C => (BIT, self.absolute(), 4),
+            0x24 => (BIT, self.zero_page(), Cycles::Fixed(3)),
+            0x2C => (BIT, self.absolute(), Cycles::Fixed(4)),
 
-            0x30 => (BMI, self.relative(), 2),
+            0x30 => (BMI, self.relative(), Cycles::Fixed(2)),
 
-            0xD0 => (BNE, self.relative(), 2),
+            0xD0 => (BNE, self.relative(), Cycles::Fixed(2)),
             
-            0x10 => (BPL, self.relative(), 2),
+            0x10 => (BPL, self.relative(), Cycles::Fixed(2)),
 
-            0x00 => (BRK, self.implied(), 7),
+            0x00 => (BRK, self.implied(), Cycles::Fixed(7)),
 
-            0x50 => (BVC, self.relative(), 2),
+            0x50 => (BVC, self.relative(), Cycles::Fixed(2)),
 
-            0x70 => (BVS, self.relative(), 2),
+            0x70 => (BVS, self.relative(), Cycles::Fixed(2)),
 
-            0x18 => (CLC, self.implied(), 2),
+            0x18 => (CLC, self.implied(), Cycles::Fixed(2)),
 
-            0xD8 => (CLD, self.implied(), 2),
+            0xD8 => (CLD, self.implied(), Cycles::Fixed(2)),
             
-            0x58 => (CLI, self.implied(), 2),
+            0x58 => (CLI, self.implied(), Cycles::Fixed(2)),
             
-            0xB8 => (CLV, self.implied(), 2),
+            0xB8 => (CLV, self.implied(), Cycles::Fixed(2)),
 
-            0xC9 => (CMP, self.immediate(), 2),
-            0xC5 => (CMP, self.zero_page(), 3),
-            0xD5 => (CMP, self.zero_page_x(), 4),
-            0xCD => (CMP, self.absolute(), 4),
-            0xDD => (CMP, self.absolute_x(), 4),
-            0xD9 => (CMP, self.absolute_y(), 4),
-            0xC1 => (CMP, self.indirect_zero_page_x(), 6),
-            0xD1 => (CMP, self.indirect_zero_page_y(), 5),
+            0xC9 => (CMP, self.immediate(), Cycles::Fixed(2)),
+            0xC5 => (CMP, self.zero_page(), Cycles::Fixed(3)),
+            0xD5 => (CMP, self.zero_page_x(), Cycles::Fixed(4)),
+            0xCD => (CMP, self.absolute(), Cycles::Fixed(4)),
+            0xDD => (CMP, self.absolute_x(), Cycles::PageCrossing(4)),
+            0xD9 => (CMP, self.absolute_y(), Cycles::PageCrossing(4)),
+            0xC1 => (CMP, self.indirect_zero_page_x(), Cycles::Fixed(6)),
+            0xD1 => (CMP, self.indirect_zero_page_y(), Cycles::PageCrossing(5)),
 
-            0xE0 => (CPX, self.immediate(), 2),
-            0xE4 => (CPX, self.zero_page(), 3),
-            0xEC => (CPX, self.absolute(), 4),
+            0xE0 => (CPX, self.immediate(), Cycles::Fixed(2)),
+            0xE4 => (CPX, self.zero_page(), Cycles::Fixed(3)),
+            0xEC => (CPX, self.absolute(), Cycles::Fixed(4)),
 
-            0xC0 => (CPY, self.immediate(), 2),
-            0xC4 => (CPY, self.zero_page(), 3),
-            0xCC => (CPY, self.absolute(), 4),
+            0xC0 => (CPY, self.immediate(), Cycles::Fixed(2)),
+            0xC4 => (CPY, self.zero_page(), Cycles::Fixed(3)),
+            0xCC => (CPY, self.absolute(), Cycles::Fixed(4)),
 
-            0xC6 => (DEC, self.zero_page(), 5),
-            0xD6 => (DEC, self.zero_page_x(), 6),
-            0xCE => (DEC, self.absolute(), 6),
-            0xDE => (DEC, self.absolute_x(), 7),
+            0xC6 => (DEC, self.zero_page(), Cycles::Fixed(5)),
+            0xD6 => (DEC, self.zero_page_x(), Cycles::Fixed(6)),
+            0xCE => (DEC, self.absolute(), Cycles::Fixed(6)),
+            0xDE => (DEC, self.absolute_x(), Cycles::Fixed(7)),
 
-            0xCA => (DEX, self.implied(), 2),
+            0xCA => (DEX, self.implied(), Cycles::Fixed(2)),
 
-            0x88 => (DEY, self.implied(), 2),
+            0x88 => (DEY, self.implied(), Cycles::Fixed(2)),
 
-            0x49 => (EOR, self.immediate(), 2),
-            0x45 => (EOR, self.zero_page(), 3),
-            0x55 => (EOR, self.zero_page_x(), 4),
-            0x4D => (EOR, self.absolute(), 4),
-            0x5D => (EOR, self.absolute_x(), 4),
-            0x59 => (EOR, self.absolute_y(), 4),
-            0x41 => (EOR, self.indirect_zero_page_x(), 6),
-            0x51 => (EOR, self.indirect_zero_page_y(), 5),
+            0x49 => (EOR, self.immediate(), Cycles::Fixed(2)),
+            0x45 => (EOR, self.zero_page(), Cycles::Fixed(3)),
+            0x55 => (EOR, self.zero_page_x(), Cycles::Fixed(4)),
+            0x4D => (EOR, self.absolute(), Cycles::Fixed(4)),
+            0x5D => (EOR, self.absolute_x(), Cycles::PageCrossing(4)),
+            0x59 => (EOR, self.absolute_y(), Cycles::PageCrossing(4)),
+            0x41 => (EOR, self.indirect_zero_page_x(), Cycles::Fixed(6)),
+            0x51 => (EOR, self.indirect_zero_page_y(), Cycles::PageCrossing(5)),
 
 
-            0xE6 => (INC, self.zero_page(), 5),
-            0xF6 => (INC, self.zero_page_x(), 6),
-            0xEE => (INC, self.absolute(), 6),
-            0xFE => (INC, self.absolute_x(), 7),
+            0xE6 => (INC, self.zero_page(), Cycles::Fixed(5)),
+            0xF6 => (INC, self.zero_page_x(), Cycles::Fixed(6)),
+            0xEE => (INC, self.absolute(), Cycles::Fixed(6)),
+            0xFE => (INC, self.absolute_x(), Cycles::Fixed(7)),
 
-            0xE8 => (INX, self.implied(), 2),
+            0xE8 => (INX, self.implied(), Cycles::Fixed(2)),
 
-            0xC8 => (INY, self.implied(), 2),
+            0xC8 => (INY, self.implied(), Cycles::Fixed(2)),
 
-            0x4C => (JMP, self.absolute(), 3),
-            0x6C => (JMP, self.indirect(), 5),
+            0x4C => (JMP, self.absolute(), Cycles::Fixed(3)),
+            0x6C => (JMP, self.indirect(), Cycles::Fixed(5)),
 
-            0x20 => (JSR, self.absolute(), 6),
+            0x20 => (JSR, self.absolute(), Cycles::Fixed(6)),
 
-            0xA9 => (LDA, self.immediate(), 2),
-            0xA5 => (LDA, self.zero_page(), 3),
-            0xB5 => (LDA, self.zero_page_x(), 4),
-            0xAD => (LDA, self.absolute(), 4),
-            0xBD => (LDA, self.absolute_x(), 4),
-            0xB9 => (LDA, self.absolute_y(), 4),
-            0xA1 => (LDA, self.indirect_zero_page_x(), 6),
-            0xB1 => (LDA, self.indirect_zero_page_y(), 5),    
+            0xA9 => (LDA, self.immediate(), Cycles::Fixed(2)),
+            0xA5 => (LDA, self.zero_page(), Cycles::Fixed(3)),
+            0xB5 => (LDA, self.zero_page_x(), Cycles::Fixed(4)),
+            0xAD => (LDA, self.absolute(), Cycles::Fixed(4)),
+            0xBD => (LDA, self.absolute_x(), Cycles::PageCrossing(4)),
+            0xB9 => (LDA, self.absolute_y(), Cycles::PageCrossing(4)),
+            0xA1 => (LDA, self.indirect_zero_page_x(), Cycles::Fixed(6)),
+            0xB1 => (LDA, self.indirect_zero_page_y(), Cycles::PageCrossing(5)),    
 
-            0xA2 => (LDX, self.immediate(), 2),
-            0xA6 => (LDX, self.zero_page(), 3),
-            0xB6 => (LDX, self.zero_page_y(), 4),
-            0xAE => (LDX, self.absolute(), 4),
-            0xBE => (LDX, self.absolute_y(), 4),
+            0xA2 => (LDX, self.immediate(), Cycles::Fixed(2)),
+            0xA6 => (LDX, self.zero_page(), Cycles::Fixed(3)),
+            0xB6 => (LDX, self.zero_page_y(), Cycles::Fixed(4)),
+            0xAE => (LDX, self.absolute(), Cycles::Fixed(4)),
+            0xBE => (LDX, self.absolute_y(), Cycles::PageCrossing(4)),
 
-            0xA0 => (LDY, self.immediate(), 2),
-            0xA4 => (LDY, self.zero_page(), 3),
-            0xB4 => (LDY, self.zero_page_x(), 4),
-            0xAC => (LDY, self.absolute(), 4),
-            0xBC => (LDY, self.absolute_x(), 4),
+            0xA0 => (LDY, self.immediate(), Cycles::Fixed(2)),
+            0xA4 => (LDY, self.zero_page(), Cycles::Fixed(3)),
+            0xB4 => (LDY, self.zero_page_x(), Cycles::Fixed(4)),
+            0xAC => (LDY, self.absolute(), Cycles::Fixed(4)),
+            0xBC => (LDY, self.absolute_x(), Cycles::PageCrossing(4)),
 
-            0x4A => (LSR, self.implied(), 2),
-            0x46 => (LSR, self.zero_page(), 5),
-            0x56 => (LSR, self.zero_page_x(), 6),
-            0x4E => (LSR, self.absolute(), 6),
-            0x5E => (LSR, self.absolute_x(), 7),
+            0x4A => (LSR, self.implied(), Cycles::Fixed(2)),
+            0x46 => (LSR, self.zero_page(), Cycles::Fixed(5)),
+            0x56 => (LSR, self.zero_page_x(), Cycles::Fixed(6)),
+            0x4E => (LSR, self.absolute(), Cycles::Fixed(6)),
+            0x5E => (LSR, self.absolute_x(), Cycles::Fixed(7)),
 
             // A ton of NOOP's
-            0xEA => (NOP, self.implied(), 2),
-            0x1A => (NOP, self.implied(), 2),
-            0x3A => (NOP, self.implied(), 2),
-            0x5A => (NOP, self.implied(), 2),
-            0x7A => (NOP, self.implied(), 2),
-            0xDA => (NOP, self.implied(), 2),
-            0xFA => (NOP, self.implied(), 2),
-            0x80 => (NOP, self.immediate(), 2),
-            0x82 => (NOP, self.immediate(), 2),
-            0x89 => (NOP, self.immediate(), 2),
-            0xC2 => (NOP, self.immediate(), 2),
-            0xE2 => (NOP, self.immediate(), 2),
-            0x04 => (NOP, self.zero_page(), 3),
-            0x44 => (NOP, self.zero_page(), 3),
-            0x64 => (NOP, self.zero_page(), 3),
-            0x14 => (NOP, self.zero_page_x(), 4),
-            0x34 => (NOP, self.zero_page_x(), 4),
-            0x54 => (NOP, self.zero_page_x(), 4),
-            0x74 => (NOP, self.zero_page_x(), 4),
-            0xD4 => (NOP, self.zero_page_x(), 4),
-            0xF4 => (NOP, self.zero_page_x(), 4),
-            0x0C => (NOP, self.absolute(), 4),
-            0x1C => (NOP, self.absolute_x(), 4),
-            0x3C => (NOP, self.absolute_x(), 4),
-            0x5C => (NOP, self.absolute_x(), 4),
-            0x7C => (NOP, self.absolute_x(), 4),
-            0xDC => (NOP, self.absolute_x(), 4),
-            0xFC => (NOP, self.absolute_x(), 4),
+            0xEA => (NOP, self.implied(), Cycles::Fixed(2)),
+            0x1A => (NOP, self.implied(), Cycles::Fixed(2)),
+            0x3A => (NOP, self.implied(), Cycles::Fixed(2)),
+            0x5A => (NOP, self.implied(), Cycles::Fixed(2)),
+            0x7A => (NOP, self.implied(), Cycles::Fixed(2)),
+            0xDA => (NOP, self.implied(), Cycles::Fixed(2)),
+            0xFA => (NOP, self.implied(), Cycles::Fixed(2)),
+            0x80 => (NOP, self.immediate(), Cycles::Fixed(2)),
+            0x82 => (NOP, self.immediate(), Cycles::Fixed(2)),
+            0x89 => (NOP, self.immediate(), Cycles::Fixed(2)),
+            0xC2 => (NOP, self.immediate(), Cycles::Fixed(2)),
+            0xE2 => (NOP, self.immediate(), Cycles::Fixed(2)),
+            0x04 => (NOP, self.zero_page(), Cycles::Fixed(3)),
+            0x44 => (NOP, self.zero_page(), Cycles::Fixed(3)),
+            0x64 => (NOP, self.zero_page(), Cycles::Fixed(3)),
+            0x14 => (NOP, self.zero_page_x(), Cycles::Fixed(4)),
+            0x34 => (NOP, self.zero_page_x(), Cycles::Fixed(4)),
+            0x54 => (NOP, self.zero_page_x(), Cycles::Fixed(4)),
+            0x74 => (NOP, self.zero_page_x(), Cycles::Fixed(4)),
+            0xD4 => (NOP, self.zero_page_x(), Cycles::Fixed(4)),
+            0xF4 => (NOP, self.zero_page_x(), Cycles::Fixed(4)),
+            0x0C => (NOP, self.absolute(), Cycles::Fixed(4)),
+            0x1C => (NOP, self.absolute_x(), Cycles::PageCrossing(4)),
+            0x3C => (NOP, self.absolute_x(), Cycles::PageCrossing(4)),
+            0x5C => (NOP, self.absolute_x(), Cycles::PageCrossing(4)),
+            0x7C => (NOP, self.absolute_x(), Cycles::PageCrossing(4)),
+            0xDC => (NOP, self.absolute_x(), Cycles::PageCrossing(4)),
+            0xFC => (NOP, self.absolute_x(), Cycles::PageCrossing(4)),
 
-            0x09 => (ORA, self.immediate(), 2),
-            0x05 => (ORA, self.zero_page(), 3),
-            0x15 => (ORA, self.zero_page_x(), 4),
-            0x0D => (ORA, self.absolute(), 4),
-            0x1D => (ORA, self.absolute_x(), 4),
-            0x19 => (ORA, self.absolute_y(), 4),
-            0x01 => (ORA, self.indirect_zero_page_x(), 6),
-            0x11 => (ORA, self.indirect_zero_page_y(), 5),
+            0x09 => (ORA, self.immediate(), Cycles::Fixed(2)),
+            0x05 => (ORA, self.zero_page(), Cycles::Fixed(3)),
+            0x15 => (ORA, self.zero_page_x(), Cycles::Fixed(4)),
+            0x0D => (ORA, self.absolute(), Cycles::Fixed(4)),
+            0x1D => (ORA, self.absolute_x(), Cycles::PageCrossing(4)),
+            0x19 => (ORA, self.absolute_y(), Cycles::PageCrossing(4)),
+            0x01 => (ORA, self.indirect_zero_page_x(), Cycles::Fixed(6)),
+            0x11 => (ORA, self.indirect_zero_page_y(), Cycles::PageCrossing(5)),
 
-            0x48 => (PHA, self.implied(), 3),
+            0x48 => (PHA, self.implied(), Cycles::Fixed(3)),
 
-            0x08 => (PHP, self.implied(), 3),
+            0x08 => (PHP, self.implied(), Cycles::Fixed(3)),
 
-            0x68 => (PLA, self.implied(), 4),
+            0x68 => (PLA, self.implied(), Cycles::Fixed(4)),
 
-            0x28 => (PLP, self.implied(), 4),
+            0x28 => (PLP, self.implied(), Cycles::Fixed(4)),
 
-            0x2A => (ROL, self.implied(), 2),
-            0x26 => (ROL, self.zero_page(), 5),
-            0x36 => (ROL, self.zero_page_x(), 6),
-            0x2E => (ROL, self.absolute(), 6),
-            0x3E => (ROL, self.absolute_x(), 7),
+            0x2A => (ROL, self.implied(), Cycles::Fixed(2)),
+            0x26 => (ROL, self.zero_page(), Cycles::Fixed(5)),
+            0x36 => (ROL, self.zero_page_x(), Cycles::Fixed(6)),
+            0x2E => (ROL, self.absolute(), Cycles::Fixed(6)),
+            0x3E => (ROL, self.absolute_x(), Cycles::Fixed(7)),
 
-            0x6A => (ROR, self.implied(), 2),
-            0x66 => (ROR, self.zero_page(), 5),
-            0x76 => (ROR, self.zero_page_x(), 6),
-            0x6E => (ROR, self.absolute(), 6),
-            0x7E => (ROR, self.absolute_x(), 7),
+            0x6A => (ROR, self.implied(), Cycles::Fixed(2)),
+            0x66 => (ROR, self.zero_page(), Cycles::Fixed(5)),
+            0x76 => (ROR, self.zero_page_x(), Cycles::Fixed(6)),
+            0x6E => (ROR, self.absolute(), Cycles::Fixed(6)),
+            0x7E => (ROR, self.absolute_x(), Cycles::Fixed(7)),
 
-            0x40 => (RTI, self.implied(), 6),
+            0x40 => (RTI, self.implied(), Cycles::Fixed(6)),
 
-            0x60 => (RTS, self.implied(), 6),
+            0x60 => (RTS, self.implied(), Cycles::Fixed(6)),
 
-            0xE9 => (SBC, self.immediate(), 2),
-            0xE5 => (SBC, self.zero_page(), 3),
-            0xF5 => (SBC, self.zero_page_x(), 4),
-            0xED => (SBC, self.absolute(), 4),
-            0xFD => (SBC, self.absolute_x(), 4),
-            0xF9 => (SBC, self.absolute_y(), 4),
-            0xE1 => (SBC, self.indirect_zero_page_x(), 6),
-            0xF1 => (SBC, self.indirect_zero_page_y(), 5),
+            0xE9 => (SBC, self.immediate(), Cycles::Fixed(2)),
+            0xE5 => (SBC, self.zero_page(), Cycles::Fixed(3)),
+            0xF5 => (SBC, self.zero_page_x(), Cycles::Fixed(4)),
+            0xED => (SBC, self.absolute(), Cycles::Fixed(4)),
+            0xFD => (SBC, self.absolute_x(), Cycles::PageCrossing(4)),
+            0xF9 => (SBC, self.absolute_y(), Cycles::PageCrossing(4)),
+            0xE1 => (SBC, self.indirect_zero_page_x(), Cycles::Fixed(6)),
+            0xF1 => (SBC, self.indirect_zero_page_y(), Cycles::PageCrossing(5)),
 
-            0x38 => (SEC, self.implied(), 2),
+            0x38 => (SEC, self.implied(), Cycles::Fixed(2)),
 
-            0xF8 => (SED, self.implied(), 2),
+            0xF8 => (SED, self.implied(), Cycles::Fixed(2)),
 
-            0x78 => (SEI, self.implied(), 2),
+            0x78 => (SEI, self.implied(), Cycles::Fixed(2)),
 
-            0x85 => (STA, self.zero_page(), 3),
-            0x95 => (STA, self.zero_page_x(), 4),
-            0x8D => (STA, self.absolute(), 4),
-            0x9D => (STA, self.absolute_x(), 5),
-            0x99 => (STA, self.absolute_y(), 5),
-            0x81 => (STA, self.indirect_zero_page_x(), 6),
-            0x91 => (STA, self.indirect_zero_page_y(), 6),
+            0x85 => (STA, self.zero_page(), Cycles::Fixed(3)),
+            0x95 => (STA, self.zero_page_x(), Cycles::Fixed(4)),
+            0x8D => (STA, self.absolute(), Cycles::Fixed(4)),
+            0x9D => (STA, self.absolute_x(), Cycles::Fixed(5)),
+            0x99 => (STA, self.absolute_y(), Cycles::Fixed(5)),
+            0x81 => (STA, self.indirect_zero_page_x(), Cycles::Fixed(6)),
+            0x91 => (STA, self.indirect_zero_page_y(), Cycles::Fixed(6)),
 
-            0x86 => (STX, self.zero_page(), 3),
-            0x96 => (STX, self.zero_page_y(), 4),
-            0x8E => (STX, self.absolute(), 4),
+            0x86 => (STX, self.zero_page(), Cycles::Fixed(3)),
+            0x96 => (STX, self.zero_page_y(), Cycles::Fixed(4)),
+            0x8E => (STX, self.absolute(), Cycles::Fixed(4)),
 
-            0x84 => (STY, self.zero_page(), 3),
-            0x94 => (STY, self.zero_page_x(), 4),
-            0x8C => (STY, self.absolute(), 4),
+            0x84 => (STY, self.zero_page(), Cycles::Fixed(3)),
+            0x94 => (STY, self.zero_page_x(), Cycles::Fixed(4)),
+            0x8C => (STY, self.absolute(), Cycles::Fixed(4)),
 
-            0xAA => (TAX, self.implied(), 2),
-            0xA8 => (TAY, self.implied(), 2),
-            0xBA => (TSX, self.implied(), 2),
-            0x8A => (TXA, self.implied(), 2),
-            0x9A => (TXS, self.implied(), 2),
-            0x98 => (TYA, self.implied(), 2),
+            0xAA => (TAX, self.implied(), Cycles::Fixed(2)),
+            0xA8 => (TAY, self.implied(), Cycles::Fixed(2)),
+            0xBA => (TSX, self.implied(), Cycles::Fixed(2)),
+            0x8A => (TXA, self.implied(), Cycles::Fixed(2)),
+            0x9A => (TXS, self.implied(), Cycles::Fixed(2)),
+            0x98 => (TYA, self.implied(), Cycles::Fixed(2)),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -481,9 +486,13 @@ impl Cpu {
         }
     }
 
-    fn branch_offset(&mut self, offset: u8) {
-        // Treat the offset as signed and add it to the PC (wrapping if necessary).
-        self.pc = (self.pc & 0xFF00) + (((self.pc as u8).wrapping_add(offset)) as u16);
+    // Returns whether or not a page was crossed.
+    fn branch_offset(&mut self, offset: u8) -> PageBoundaryResult {
+        // Treat the offset as signed and add it to the PC directly.
+        let new_addr = self.pc.wrapping_add_signed((offset as i8).into());
+        let page_crossed = new_addr & 0xFF00 != self.pc & 0xFF00;
+        self.pc = new_addr;
+        if page_crossed { PageBoundaryResult::PageBoundaryCrossed } else { PageBoundaryResult::SamePage }
     }
 
     // Add With Carry
@@ -543,12 +552,11 @@ impl Cpu {
     // branch on C = 0
     // Affects Flags: (none)
     // Returns a bool for whether or not we branch.
-    fn bcc(&mut self, m: u8) -> bool {
+    fn bcc(&mut self, m: u8) -> (bool, PageBoundaryResult) {
         if !self.processor_status.is_carry() {
-            self.branch_offset(m);
-            true
+            (true, self.branch_offset(m))
         } else {
-            false
+            (false, PageBoundaryResult::Irrelevant)
         }
     }
 
@@ -556,12 +564,11 @@ impl Cpu {
     // branch on C = 1
     // Affects Flags: (none)
     // Returns a bool for whether or not we branch.
-    fn bcs(&mut self, m: u8) -> bool {
+    fn bcs(&mut self, m: u8) -> (bool, PageBoundaryResult) {
         if self.processor_status.is_carry() {
-            self.branch_offset(m);
-            true
+            (true, self.branch_offset(m))
         } else {
-            false
+            (false, PageBoundaryResult::Irrelevant)
         }
     }
 
@@ -569,12 +576,11 @@ impl Cpu {
     // branch on Z = 1
     // Affects Flags: (none)
     // Returns a bool for whether or not we branch.
-    fn beq(&mut self, m: u8) -> bool {
+    fn beq(&mut self, m: u8) -> (bool, PageBoundaryResult) {
         if self.processor_status.is_zero() {
-            self.branch_offset(m);
-            true
+            (true, self.branch_offset(m))
         } else {
-            false
+            (false, PageBoundaryResult::Irrelevant)
         }
     }
 
@@ -597,12 +603,11 @@ impl Cpu {
     // branch on N = 1
     // Affects Flags: (none)
     // Returns a bool for whether or not we branch.
-    fn bmi(&mut self, m: u8) -> bool {
+    fn bmi(&mut self, m: u8) -> (bool, PageBoundaryResult) {
         if self.processor_status.is_negative() {
-            self.branch_offset(m);
-            true
+            (true, self.branch_offset(m))
         } else {
-            false
+            (false, PageBoundaryResult::Irrelevant)
         }
     }
 
@@ -610,12 +615,11 @@ impl Cpu {
     // branch on Z = 0
     // Affects Flags: (none)
     // Returns a bool for whether or not we branch.
-    fn bne(&mut self, m: u8) -> bool {
+    fn bne(&mut self, m: u8) -> (bool, PageBoundaryResult) {
         if !self.processor_status.is_zero() {
-            self.branch_offset(m);
-            true
+            (true, self.branch_offset(m))
         } else {
-            false
+            (false, PageBoundaryResult::Irrelevant)
         }
     }
 
@@ -623,12 +627,11 @@ impl Cpu {
     // branch on N = 0
     // Affects Flags: (none)
     // Returns a bool for whether or not we branch.
-    fn bpl(&mut self, m: u8) -> bool {
+    fn bpl(&mut self, m: u8) -> (bool, PageBoundaryResult) {
         if !self.processor_status.is_negative() {
-            self.branch_offset(m);
-            true
+            (true, self.branch_offset(m))
         } else {
-            false
+            (false, PageBoundaryResult::Irrelevant)
         }
     }
 
@@ -649,12 +652,11 @@ impl Cpu {
     // branch on V = 0
     // Affects Flags: (none)
     // Returns a bool for whether or not we branch.
-    fn bvc(&mut self, m: u8) -> bool {
+    fn bvc(&mut self, m: u8) -> (bool, PageBoundaryResult) {
         if !self.processor_status.is_overflow() {
-            self.branch_offset(m);
-            true
+            (true, self.branch_offset(m))
         } else {
-            false
+            (false, PageBoundaryResult::Irrelevant)
         }
     }
 
@@ -662,12 +664,11 @@ impl Cpu {
     // branch on V = 1
     // Affects Flags: (none)
     // Returns a bool for whether or not we branch.
-    fn bvs(&mut self, m: u8) -> bool {
+    fn bvs(&mut self, m: u8) -> (bool, PageBoundaryResult) {
         if self.processor_status.is_overflow() {
-            self.branch_offset(m);
-            true
+            (true, self.branch_offset(m))
         } else {
-            false
+            (false, PageBoundaryResult::Irrelevant)
         }
     }
 
@@ -1085,18 +1086,18 @@ impl Cpu {
     // ----------- Instruction Fetching ----------- //
 
     // A bit of a hack to deal with the variability of branch cycles.
-    fn calculate_branch_cycles(num_cycles: &mut usize, branch: bool, pbc: bool) {
+    fn calculate_branch_cycles(num_cycles: &mut usize, branch_and_pbr: (bool, PageBoundaryResult)) {
         // Cycle Calculation
         // Branch | PBR | Cycles
         //    F   |  F  | 2
         //    F   |  T  | 2
         //    T   |  F  | 3
         //    T   |  T  | 4
-        *num_cycles = if branch {
-            if pbc { 4 } else { 3 }
-        } else {
-            2
-        }
+        *num_cycles = match branch_and_pbr {
+            (true, PageBoundaryResult::PageBoundaryCrossed) => 4,
+            (true, _) => 3,
+            (false, _) => 2,
+        };
     }
 
     pub fn fetch_instruction_and_execute(&mut self) {
@@ -1104,7 +1105,11 @@ impl Cpu {
         // Now our PC is at the next instruction, so offsets will be measured relative to that.
         let AddressingModeData { data, address, page_boundary_result } = addressing_mode.into_data(self);
         let pbc = page_boundary_result == PageBoundaryCrossed;
-        let mut num_cycles: usize = cycles + if pbc { 1 } else { 0 };
+        let mut num_cycles = match (cycles, pbc) {
+            (Cycles::Fixed(n), _) => n,
+            (Cycles::PageCrossing(n), false) => n,
+            (Cycles::PageCrossing(n), true) => n + 1,
+        };
         // Now we can actually *execute* the instruction.
         match opcode {
             Opcode::ADC => self.adc(data),
@@ -1118,16 +1123,16 @@ impl Cpu {
                 };
                 self.asl(data, wl);
             },
-            Opcode::BCC => Self::calculate_branch_cycles(&mut num_cycles, self.bcc(data), pbc),
-            Opcode::BCS => Self::calculate_branch_cycles(&mut num_cycles, self.bcs(data), pbc),
-            Opcode::BEQ => Self::calculate_branch_cycles(&mut num_cycles, self.beq(data), pbc),
+            Opcode::BCC => Self::calculate_branch_cycles(&mut num_cycles, self.bcc(data)),
+            Opcode::BCS => Self::calculate_branch_cycles(&mut num_cycles, self.bcs(data)),
+            Opcode::BEQ => Self::calculate_branch_cycles(&mut num_cycles, self.beq(data)),
             Opcode::BIT => self.bit(data),
-            Opcode::BMI => Self::calculate_branch_cycles(&mut num_cycles, self.bmi(data), pbc),
-            Opcode::BNE => Self::calculate_branch_cycles(&mut num_cycles, self.bne(data), pbc),
-            Opcode::BPL => Self::calculate_branch_cycles(&mut num_cycles, self.bpl(data), pbc),
+            Opcode::BMI => Self::calculate_branch_cycles(&mut num_cycles, self.bmi(data)),
+            Opcode::BNE => Self::calculate_branch_cycles(&mut num_cycles, self.bne(data)),
+            Opcode::BPL => Self::calculate_branch_cycles(&mut num_cycles, self.bpl(data)),
             Opcode::BRK => self.brk(),
-            Opcode::BVC => Self::calculate_branch_cycles(&mut num_cycles, self.bvc(data), pbc),
-            Opcode::BVS => Self::calculate_branch_cycles(&mut num_cycles, self.bvs(data), pbc),
+            Opcode::BVC => Self::calculate_branch_cycles(&mut num_cycles, self.bvc(data)),
+            Opcode::BVS => Self::calculate_branch_cycles(&mut num_cycles, self.bvs(data)),
             Opcode::CLC => self.clc(),
             Opcode::CLD => self.cld(),
             Opcode::CLI => self.cli(),
