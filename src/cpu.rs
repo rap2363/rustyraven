@@ -70,7 +70,7 @@ pub struct Cpu {
     pub a: u8,
     pub x: u8,
     pub y: u8,
-    cycle_count: usize,
+    pub cycle_count: usize,
 }
 
 pub struct FetchInstructionResult {
@@ -407,7 +407,7 @@ impl Cpu {
             0xBA => (TSX, self.implied(), 2),
             0x8A => (TXA, self.implied(), 2),
             0x9A => (TXS, self.implied(), 2),
-            0x09 => (TYA, self.implied(), 2),
+            0x98 => (TYA, self.implied(), 2),
 
             x => todo!("Unimplemented opcode: {:?}!", x),
         };
@@ -423,13 +423,17 @@ impl Cpu {
         }
     }
 
-    fn check_and_set_overflow(&mut self, sum: u16) {
-        let s_sum = sum as i16;
-        if s_sum < -128 || sum > 127 {
-            self.processor_status = self.processor_status.set_overflow();
+    fn check_and_set_overflow(&mut self, x: u8, y: u8, sum: u8) {
+        let s_x = x as i8;
+        let s_y = y as i8;
+        let s_sum = sum as i8;
+        self.processor_status = if s_x > 0 && s_y > 0 && s_sum < 0 {
+            self.processor_status.set_overflow()
+        } else if s_x < 0 && s_y < 0 && s_sum > 0 {
+            self.processor_status.set_overflow()
         } else {
-            self.processor_status = self.processor_status.clear_overflow();
-        }
+            self.processor_status.clear_overflow()
+        };
     }
 
     // Checks and sets/clears the zero flag based on a byte.
@@ -453,14 +457,14 @@ impl Cpu {
     // A <- A + M + C
     // Affects Flags: N, V, Z, C
     fn adc(&mut self, m: u8) {
-        let extended_result = self.a as u16 + m as u16 + self.processor_status.carry() as u16;
+        let extended_result = (self.a as u16) + (m as u16) + (self.processor_status.carry() as u16);
         let c = (extended_result >> 8) & 0x0001 == 0x0001;
 
         let result = extended_result as u8;
 
         // Flags
         self.check_and_set_negative(result);
-        self.check_and_set_overflow(extended_result);
+        self.check_and_set_overflow(self.a, m, result);
         self.check_and_set_zero(result);
         self.check_and_set_carry(c);
 
@@ -548,7 +552,6 @@ impl Cpu {
     // Returns a bool for whether or not we branch.
     fn bit(&mut self, m: u8) {
         self.check_and_set_negative(m);
-        println!("0x{:02X}", m);
         if (m >> 6) & 0x01 == 0x01 {
             self.processor_status = self.processor_status.set_overflow();
         } else {
@@ -663,14 +666,14 @@ impl Cpu {
         self.processor_status = self.processor_status.clear_overflow();
     }
 
-    // Helper method for the cmp ops.
-    fn cmp_processor_status(&self, data: i8) -> ProcessorStatus {
-        if data > 0 {
+    // Helper method for the cmp ops. Compares a and b.
+    fn cmp_processor_status(&self, a: u8, b: u8) -> ProcessorStatus {
+        if a > b {
             self.processor_status.set_carry().clear_negative().clear_zero()
-        } else if data < 0 {
+        } else if a < b {
             self.processor_status.set_negative().clear_carry().clear_zero()
         } else {
-            self.processor_status.set_zero().clear_carry().clear_negative()
+            self.processor_status.set_zero().set_carry().clear_negative()
         }
     }
 
@@ -679,7 +682,7 @@ impl Cpu {
     // A - M
     // Affects Flags: N Z C
     fn cmp(&mut self, m: u8) {
-        self.processor_status = self.cmp_processor_status((self.a as i8) - (m as i8));
+        self.processor_status = self.cmp_processor_status(self.a, m);
     }
 
     // Compare X register to memory (this *only* sets flags based on the value of X - M).
@@ -687,7 +690,7 @@ impl Cpu {
     // X - M
     // Affects Flags: N Z C
     fn cpx(&mut self, m: u8) {
-        self.processor_status = self.cmp_processor_status((self.x as i8) - (m as i8));
+        self.processor_status = self.cmp_processor_status(self.x, m);
     }
 
     // Compare accumulator to memory (this *only* sets flags based on the value of Y - M).
@@ -695,7 +698,7 @@ impl Cpu {
     // Y - M
     // Affects Flags: N Z C
     fn cpy(&mut self, m: u8) {
-        self.processor_status = self.cmp_processor_status((self.y as i8) - (m as i8));
+        self.processor_status = self.cmp_processor_status(self.y, m);
     }
 
     // Decrement memory by one. Requires us to *write* to a location in memory.
@@ -851,7 +854,7 @@ impl Cpu {
     // Push the processor status onto the stack
     // Affects Flags: (none)
     fn php(&mut self) {
-        self.push_stack(self.processor_status.into());
+        self.push_stack(self.processor_status.set_break().set_bit_five().into());
     }
 
     // Pulls the accumulator from the stack
@@ -930,14 +933,14 @@ impl Cpu {
     // A <- A - M - !C
     // Affects Flags: N Z C V
     fn sbc(&mut self, m: u8) {
-        let extended_result = (self.a as u16) - (m as u16) - (0x0001 - self.processor_status.carry() as u16);
+        let extended_result = (self.a as u16) + (m.wrapping_neg() as u16) + if !self.processor_status.is_carry() { 0x01_u8.wrapping_neg() as u16 } else { 0x0000 };
         let c = (extended_result >> 8) & 0x0001 == 0x0001;
 
         let result = extended_result as u8;
 
         // Flags
         self.check_and_set_negative(result);
-        self.check_and_set_overflow(extended_result);
+        self.check_and_set_overflow(self.a, m.wrapping_neg(),result);
         self.check_and_set_zero(result);
         self.check_and_set_carry(c);
 
@@ -1145,7 +1148,6 @@ impl Cpu {
             Opcode::TXA => self.txa(),
             Opcode::TXS => self.txs(),
             Opcode::TYA => self.tya(),
-            x => todo!("Unimplemented Opcode {:?}", x),
         }
 
         self.cycle_count += num_cycles;
@@ -1262,7 +1264,7 @@ mod tests {
         assert_eq!(0xFC, cpu.sp);
         assert_eq!(0x00, cpu.memory.read_byte(0x10FF));
         assert_eq!(0x02, cpu.memory.read_byte(0x10FE));
-        assert_eq!(0x52, cpu.memory.read_byte(0x10FD));
+        assert_eq!(0x72, cpu.memory.read_byte(0x10FD));
     }
 
     #[test]
@@ -1279,7 +1281,7 @@ mod tests {
         cpu.fetch_instruction_and_execute();
         assert!(!cpu.processor_status.is_negative());
         assert!(cpu.processor_status.is_zero());
-        assert!(!cpu.processor_status.is_carry());
+        assert!(cpu.processor_status.is_carry());
 
         cpu.fetch_instruction_and_execute();
         assert!(!cpu.processor_status.is_negative());
@@ -1449,7 +1451,7 @@ mod tests {
 
         cpu.fetch_instruction_and_execute();
 
-        assert_eq!(cpu.processor_status.into(), 0xC8); // Break is cleared
+        assert_eq!(cpu.processor_status.into(), 0xE8); // Break is cleared
         assert_eq!(cpu.pc, 0x1234);
     }
 

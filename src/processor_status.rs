@@ -5,7 +5,7 @@ pub struct ProcessorStatus(u8);
 
 impl ProcessorStatus {
     pub fn initialize() -> Self {
-        Self(0x00)
+        Self(0x24)
     }
 
     pub fn into(self) -> u8 {
@@ -13,7 +13,7 @@ impl ProcessorStatus {
     }
 
     pub fn from(flags: u8) -> Self {
-        Self(flags)
+        Self(flags | 0x20)
     }
 
     // Carry Flag
@@ -61,11 +61,11 @@ impl ProcessorStatus {
 
     // Decimal Flag
     pub fn set_decimal(self) -> Self {
-        Self::from(self.0 | 0x80)
+        Self::from(self.0 | 0x08)
     }
 
     pub fn clear_decimal(self) -> Self {
-        Self::from(self.0 & (0xFF - 0x80))
+        Self::from(self.0 & (0xFF - 0x08))
     }
 
     pub fn is_decimal(&self) -> bool {
@@ -83,6 +83,15 @@ impl ProcessorStatus {
 
     pub fn is_break(&self) -> bool {
         (self.0 >> 4) & 0x01 == 0x01
+    }
+
+    // Bit 5 Flag
+    pub fn set_bit_five(self) -> Self {
+        Self::from(self.0 | 0x20)
+    }
+
+    pub fn clear_bit_five(self) -> Self {
+        Self::from(self.0 & (0xFF - 0x20))
     }
 
     // Overflow Flag

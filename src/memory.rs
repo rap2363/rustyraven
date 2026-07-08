@@ -53,7 +53,6 @@ impl CpuMemory {
         } else if address < 0x4000 {
             // Lower I/O
             let lower_io_address = (address - 0x2000) % 0x0008;
-            println!("{}", lower_io_address);
             self.lower_io.write_byte(lower_io_address as usize, value);
         } else {
             // Upper Memory
