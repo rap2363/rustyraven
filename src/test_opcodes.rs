@@ -102,12 +102,13 @@ struct LogLine {
     y: u8,
     p: u8,
     sp: u8,
+    cyc: usize,
 }
 
 impl LogLine {
     fn from(line: &str) -> Self {
         let tokens: Vec<&str> = line.split_whitespace().collect();
-        let (mut a, mut x, mut y, mut p, mut sp) = (None, None, None, None, None);
+        let (mut a, mut x, mut y, mut p, mut sp, mut cyc) = (None, None, None, None, None, None);
         let pc = u16::from_str_radix(tokens[0], 16).expect("First token must be parseable as an address");
         for token in &tokens[1..] {
             if token.starts_with("A:") {
@@ -125,18 +126,21 @@ impl LogLine {
             if token.starts_with("SP:") {
                 sp = Some(u8::from_str_radix(&token[3..], 16).expect("SP must be parseable as a u8"));
             }
+            if token.starts_with("CYC:") {
+                cyc = Some(usize::from_str_radix(&token[4..], 10).expect("CYC must be parseble as a usize"));
+            }
         }
 
-        let (a, x, y, p, sp) = (a.unwrap(), x.unwrap(), y.unwrap(), p.unwrap(), sp.unwrap());
-        Self { pc, a, x, y, p, sp }
+        let (a, x, y, p, sp, cyc) = (a.unwrap(), x.unwrap(), y.unwrap(), p.unwrap(), sp.unwrap(), cyc.unwrap());
+        Self { pc, a, x, y, p, sp, cyc}
     }
 
     pub fn from_cpu(cpu: &cpu::Cpu) -> Self {
-        Self {pc: cpu.pc, a: cpu.a, x: cpu.x, y: cpu.y, p: cpu.processor_status.into(), sp: cpu.sp }
+        Self {pc: cpu.pc, a: cpu.a, x: cpu.x, y: cpu.y, p: cpu.processor_status.into(), sp: cpu.sp, cyc: cpu.cycle_count }
     }
 
     pub fn to_string(&self) -> String {
-        format!("PC:0x{:04X}, A:0x{:02X}, X:0x{:02X}, Y:0x{:02X}, P:0x{:02X}, SP:0x{:02X}", self.pc, self.a, self.x, self.y, self.p, self.sp)
+        format!("PC:0x{:04X}, A:0x{:02X}, X:0x{:02X}, Y:0x{:02X}, P:0x{:02X}, SP:0x{:02X}, CYC:{}", self.pc, self.a, self.x, self.y, self.p, self.sp, self.cyc)
     }
 }
 
@@ -168,6 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // NROM means we write it to the lower and upper banks.
     cpu.memory.write_bytes(0xC000, &nes_rom.prg_rom_data);
     cpu.pc = 0xC000;
+    cpu.cycle_count = 7;
 
     // Now we will loop and test instructions, ensuring our log is matched each time.
     let mut i = 0;
