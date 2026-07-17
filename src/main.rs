@@ -32,14 +32,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !_b {
             continue;
         }
-        println!("{}", cpu.to_string());
+        // println!("{}", cpu.to_string());
         i += 1;
-        // cpu.fetch_instruction_and_execute();
-        // for addr in 0x2000..=0x2005 {
-        //     println!("0x{:04X}=0x{:02X}", addr, cpu.memory.read_byte(addr));
-        // }
-        // let addr = 0x4014;
-        // println!("0x{:04X}=0x{:02X}", addr, cpu.memory.read_byte(addr));
+        for addr in 0x2000..=0x2007 {
+            println!("0x{:04X}=0x{:02X}", addr, cpu.memory.read_byte(addr));
+        }
+        let addr = 0x4014;
+        println!("0x{:04X}=0x{:02X}", addr, cpu.memory.read_byte(addr));
     }
 
     Ok(())

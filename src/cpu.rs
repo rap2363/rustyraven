@@ -1,11 +1,10 @@
-use std::iter::Cycle;
-
 use crate::addressing_modes::PageBoundaryResult;
 use crate::addressing_modes::{AddressingMode, AddressingModeData, PageBoundaryResult::PageBoundaryCrossed};
 use crate::memory::CpuMemory;
 use crate::processor_status::ProcessorStatus;
 
 const NMI_ADDRESS: u16 = 0xFFFA;
+const RESET_ADDRESS: u16 = 0xFFFC;
 
 #[derive(Debug)]
 enum Opcode {
@@ -92,6 +91,7 @@ enum Cycles {
     Fixed(usize),
     PageCrossing(usize),
 }
+
 pub struct FetchInstructionResult {
     opcode: Opcode,
     addressing_mode: AddressingMode,
@@ -114,7 +114,7 @@ impl Cpu {
         Self {
             memory: CpuMemory::initialize(),
             processor_status: ProcessorStatus::initialize(),
-            pc: 0,
+            pc: RESET_ADDRESS,
             sp: 0xFD,
             a: 0,
             x: 0,
