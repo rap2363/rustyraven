@@ -4,8 +4,8 @@
 // P: Master/slave mode (ignored)
 // H: Sprite size (0 => 8x8, 1 => 8x16)
 // B: Background Pattern table address (0 => 0x0000, 1 => 0x1000)
-// I: VRAM address increment when CPU reads/writes to PPU_DATA (0: add 1, going across; 1: add 32, going down)
 // S: Sprite Pattern Table Address (0 => 0x0000, 1 => 0x1000 (ignored if 8x16))
+// I: VRAM address increment when CPU reads/writes to PPU_DATA (0: add 1, going across; 1: add 32, going down)
 // NN: Base Nametable address (0 => 0x2000; 1 => 0x2400; 2 => 0x2800; 3 => 0x2C00)
 #[derive(Copy, Clone, Debug)]
 struct PpuControl(u8);

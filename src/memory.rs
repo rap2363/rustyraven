@@ -1,7 +1,7 @@
 // Represents a static, contiguous layout of memory (in bytes) and offers
 // low-level API's for reading and writing. Multiple segments are used
 // to build up main memory (RAM) for the CPU.
-struct Segment<const N: usize> {
+pub struct Segment<const N: usize> {
     data: [u8; N],
 }
 
