@@ -21,6 +21,10 @@ impl PpuControl {
         Self(byte)
     }
 
+    pub fn into(self) -> u8 {
+        self.0
+    }
+
     pub fn is_nmi(self) -> bool {
         (self.0 >> 7 & 0x01) == 0x01
     }
@@ -68,6 +72,10 @@ impl PpuMask {
     pub fn from(byte: u8) -> Self {
         Self(byte)
     }
+    
+    pub fn into(self) -> u8 {
+        self.0
+    }
 
     pub fn sprites_enabled(self) -> bool {
         (self.0 >> 4 & 0x01) == 0x01
@@ -91,8 +99,20 @@ impl PpuStatus {
         Self(byte)
     }
 
+    pub fn into(self) -> u8 {
+        self.0
+    }
+
     pub fn is_vblank(self) -> bool {
         (self.0 >> 7 & 0x01) == 0x01
+    }
+
+    pub fn clear_vblank(self) -> Self {
+        Self(self.0 & 0x7F)
+    }
+
+    pub fn set_vblank(self) -> Self {
+        Self(self.0 | 0x80)
     }
 
     pub fn sprite_zero_hit(self) -> bool {

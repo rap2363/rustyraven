@@ -130,7 +130,9 @@ impl Cpu {
     }
 
     pub fn set_nmi(&mut self) {
-        self.nmi = Nmi::CycleLatency(7); // Interrupt latency with 7 cycles.
+        if let Nmi::None = self.nmi {
+            self.nmi = Nmi::CycleLatency(7); // Interrupt latency with 7 cycles.
+        }
     }
 
     fn dec_nmi(&mut self, cycles: u8) {

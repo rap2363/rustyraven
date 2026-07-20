@@ -1,7 +1,9 @@
-use std::iter::Cycle;
-
 use crate::memory::Segment;
-use crate::ppu_registers::PpuControl;
+use crate::ppu_registers::{PpuControl, PpuStatus};
+
+const PRERENDER_SCANLINE: usize = 261;
+const NUM_SCANLINES: usize = 262;
+const NUM_DOTS: usize = 341;
 
 enum PpuRegister {
     Control(u8),
@@ -84,10 +86,8 @@ impl PpuMemory {
 }
 
 // Specific operations to execute each PPU cycle. Note that each of these will take *exactly* one cycle.
-#[derive(Debug, Clone, Copy)]
+#[derive(Copy, Clone, Debug)]
 enum CycleOperation {
-    Idle,
-    BackgroundLsbit,
     NameTableAccess,
     UnusedNameTableAccess,
     IgnoredNameTableAccess,
@@ -96,24 +96,31 @@ enum CycleOperation {
     BackgroundMsb,
     IncrementHorizontalV,
     IncrementVerticalV,
-    IncrementHorizontalAndVerticalV,
     EqualizeHorizontalVT,
     EqualizeVerticalVT,
     SetVblank,
-    ClearVblankAndSpriteZero,
+    ClearVblank,
+    SpriteZeroCheck,
+    SpriteOverflowCheck,
     SpriteLsb,
     SpriteMsb,
 }
 
-struct Ppu {
+pub struct Ppu {
     memory: PpuMemory,
     control: PpuControl,
+    status: PpuStatus,
     loopy_v: u16,
     loopy_t: u16,
     fine_x: u8,
     loopy_w: WriteToggle,
-    frame_operations: [[CycleOperation; 262]; 341],
-    frame_index: (usize, usize), // row, column
+    frame_operations: Vec<[Vec<CycleOperation>; NUM_DOTS]>,
+    frame_index: (usize, usize), // row, column,
+    rendering_enabled: bool,
+    name_table_address: u16,
+    attribute_table_address: u16,
+    pattern_table_byte_lo: u8,
+    pattern_table_byte_hi: u8,
 }
 
 enum WriteToggle {
@@ -122,73 +129,85 @@ enum WriteToggle {
 }
 
 impl Ppu {
-    fn initialize() -> Self {
-        let mut frame_operations = [[CycleOperation::Idle; 262]; 341];
+    pub fn initialize() -> Self {
+        let mut frame_operations: Vec<[Vec<CycleOperation>; NUM_DOTS]> = (0..NUM_SCANLINES).map(|_| std::array::from_fn(|_| Vec::new())).collect();
         // Frame diagram: https://www.nesdev.org/w/images/default/4/4f/Ppu.svg
         // Visible lines + Prerender line.
-        for row_index in (0..=239).into_iter().chain(261..262) {
-            let mut scanline = frame_operations[row_index];
-            scanline[0] = CycleOperation::BackgroundLsbit;
+        for row_index in (0..=239).into_iter().chain(PRERENDER_SCANLINE..PRERENDER_SCANLINE + 1) {
+            let scanline: &mut [Vec<CycleOperation>; NUM_DOTS] = &mut frame_operations[row_index];
             // We do this for 256 pixels in 8-bit increments (so 256 / 8 = 32)
             for x in 0..32 {
                 let offset = 8 * x;
-                scanline[offset + 1] = CycleOperation::NameTableAccess;
-                scanline[offset + 3] = CycleOperation::AttributeTableAccess;
-                scanline[offset + 5] = CycleOperation::BackgroundLsb;
-                scanline[offset + 7] = CycleOperation::BackgroundMsb;
-                scanline[offset + 8] = if x == 31 {
-                    CycleOperation::IncrementHorizontalAndVerticalV
-                } else {
-                    CycleOperation::IncrementHorizontalV
-                };
+                scanline[offset + 1].push(CycleOperation::NameTableAccess);
+                scanline[offset + 3].push(CycleOperation::AttributeTableAccess);
+                scanline[offset + 5].push(CycleOperation::BackgroundLsb);
+                scanline[offset + 7].push(CycleOperation::BackgroundMsb);
+                scanline[offset + 8].push(CycleOperation::IncrementHorizontalV);
+                if x == 31 {
+                    scanline[offset + 8].push(CycleOperation::IncrementVerticalV);
+                }
              }
 
              // Now for sprite fetching. We do this for 8 sequences, (we can only render up to 8 sprites)
-             scanline[257] = CycleOperation::EqualizeHorizontalVT;
+             scanline[257] = vec![CycleOperation::EqualizeHorizontalVT];
              for x in 0..8 {
                 let offset = 256 + 8 * x;
-                scanline[offset + 2] = CycleOperation::UnusedNameTableAccess;
-                scanline[offset + 3] = CycleOperation::IgnoredNameTableAccess;
-                scanline[offset + 5] = CycleOperation::SpriteLsb;
-                scanline[offset + 7] = CycleOperation::SpriteMsb;
+                scanline[offset + 2].push(CycleOperation::UnusedNameTableAccess);
+                scanline[offset + 3].push(CycleOperation::IgnoredNameTableAccess);
+                scanline[offset + 5].push(CycleOperation::SpriteLsb);
+                scanline[offset + 7].push(CycleOperation::SpriteMsb);
             }
             
             // First two tiles on the next scanline
             for x in 0..2 {
                 let offset = 320 + 8 * x;
-                scanline[offset + 1] = CycleOperation::NameTableAccess;
-                scanline[offset + 3] = CycleOperation::AttributeTableAccess;
-                scanline[offset + 5] = CycleOperation::BackgroundLsb;
-                scanline[offset + 7] = CycleOperation::BackgroundMsb;
-                scanline[offset + 8] = CycleOperation::IncrementHorizontalV;
+                scanline[offset + 1].push(CycleOperation::NameTableAccess);
+                scanline[offset + 3].push(CycleOperation::AttributeTableAccess);
+                scanline[offset + 5].push(CycleOperation::BackgroundLsb);
+                scanline[offset + 7].push(CycleOperation::BackgroundMsb);
+                scanline[offset + 8].push(CycleOperation::IncrementHorizontalV);
             }
 
             // Unused name table fetches
-            scanline[338] = CycleOperation::UnusedNameTableAccess;
-            scanline[340] = CycleOperation::IgnoredNameTableAccess;
+            scanline[338].push(CycleOperation::UnusedNameTableAccess);
+            scanline[340].push(CycleOperation::IgnoredNameTableAccess);
+
+            // frame_operations[row_index] = scanline;
 
         }
 
-        frame_operations[240][0] = CycleOperation::BackgroundLsbit;
-        frame_operations[241][1] = CycleOperation::SetVblank;
+        frame_operations[241][1].push(CycleOperation::SetVblank);
         // Pre-renders
-        let mut prerender_scanline = frame_operations[261];
-        prerender_scanline[1] = CycleOperation::ClearVblankAndSpriteZero;
-        // TODO (does this mean we don't do sprite rendering on the prerender scanline?)
-        // for x in 280..=304 {
-        //     prerender_scanline[x] = CycleOperation::EqualizeVerticalVT;
-        // }
+        let prerender_scanline = &mut frame_operations[PRERENDER_SCANLINE];
+        prerender_scanline[1] = vec![CycleOperation::ClearVblank, CycleOperation::SpriteZeroCheck, CycleOperation::SpriteOverflowCheck];
+        for x in 280..=304 {
+            prerender_scanline[x].push(CycleOperation::EqualizeVerticalVT);
+        }
 
         Self {
             memory: PpuMemory::initialize(),
             control: PpuControl::from(0x00),
+            status: PpuStatus::from(0x00),
             loopy_v: 0x0000,
             loopy_t: 0x0000,
             fine_x: 0x00,
             loopy_w: WriteToggle::First,
             frame_operations: frame_operations,
-            frame_index: (261, 0), // Starts on the pre-render line
+            frame_index: (PRERENDER_SCANLINE, 0), // Starts on the pre-render line
+            rendering_enabled: false,
+            name_table_address: 0x2000,
+            attribute_table_address: 0x23C0,
+            pattern_table_byte_lo: 0x00,
+            pattern_table_byte_hi: 0x00,
         }
+    }
+
+    pub fn control(&self) -> PpuControl {
+        self.control
+    }
+
+    pub fn status(&self) -> PpuStatus {
+        self.status
     }
 
     fn read_or_write_to_register_detected(&mut self, register: PpuRegister) {
@@ -223,8 +242,6 @@ impl Ppu {
             },
             PpuRegister::Address(d) => {
                 let lower_six = d & 0x3F;
-                let lower_three = d & 0x07;
-                let upper_five = (d & 0xF8) >> 3;
                 match self.loopy_w {
                     // t: .CDEFGH ........ <- d: ..CDEFGH
                     //        <unused>     <- d: AB......
@@ -252,6 +269,87 @@ impl Ppu {
             },
         }
     }
+
+    pub fn execute_cycle(&mut self) {
+        let (scanline, dot) = self.frame_index;
+        // TODO: Cloning this is kind of ridiculous, but there's not a simple way to call into execute_operation otherwise.
+        // Maybe we could RefCell the FrameOperations or something.
+        for operation in self.frame_operations[scanline][dot].clone() {
+            // Execute the operation
+            self.execute_operation(operation);
+        }
+        // Iterate frame_index
+        let next_dot = (dot + 1) % NUM_DOTS;
+        let next_scanline = if next_dot == 0 {
+            (scanline + 1) % NUM_SCANLINES
+        } else {
+            scanline
+        };
+        self.frame_index = (next_scanline, next_dot);
+    }
+
+    fn execute_operation(&mut self, operation: CycleOperation) {
+        match operation {
+            CycleOperation::NameTableAccess | CycleOperation::UnusedNameTableAccess => {
+                self.name_table_address = 0x2000 | self.loopy_v & 0x0FFF;
+            },
+            CycleOperation::AttributeTableAccess => {
+                self.attribute_table_address = 0x23C0 | (self.loopy_v & 0x0C00) | ((self.loopy_v >> 4) & 0x0038) | ((self.loopy_v >> 2) & 0x0007);
+            },
+            CycleOperation::BackgroundLsb => {
+                // Use the name table address to fetch the correct byte from the pattern table.
+                let pattern_table_index = self.memory.read_byte(self.name_table_address);
+                self.pattern_table_byte_lo = self.memory.read_byte(self.control.base_name_table_address() + (2 * pattern_table_index as u16));
+            },
+            CycleOperation::BackgroundMsb => {
+                // Use the name table address to fetch the correct byte from the pattern table.
+                let pattern_table_index = self.memory.read_byte(self.name_table_address);
+                self.pattern_table_byte_hi = self.memory.read_byte(self.control.base_name_table_address() + (2 * pattern_table_index as u16) + 1);
+            },
+            CycleOperation::IncrementHorizontalV => {
+                self.loopy_v += 1;
+                // Incrementing the horizontal VRAM address means building a pixel line and rendering!
+                // if self.rendering_enabled() && self.frame_index.1
+                // self.render_pixels()
+            },
+            CycleOperation::IncrementVerticalV => {
+                self.loopy_v += 32;
+            },
+            CycleOperation::ClearVblank => {
+                self.status = self.status.clear_vblank();
+            },
+            CycleOperation::SetVblank => {
+                self.status = self.status.set_vblank();
+            },
+            CycleOperation::EqualizeHorizontalVT => {
+                if self.rendering_enabled {
+                    // Copy over the horizontal bits
+                    // v: ....A.. ...BCDEF <- t: ....A.. ...BCDEF
+                    self.loopy_v = (self.loopy_v & 0xFBE0) | (self.loopy_t & 0x041F)
+                }
+            },
+            CycleOperation::EqualizeVerticalVT => {
+                if self.rendering_enabled {
+                    // Copy over the vertical bits.
+                    // v: GHIA.BC DEF..... <- t: GHIA.BC DEF.....
+                    self.loopy_v = (self.loopy_v & 0x041F) | (self.loopy_t & 0xFBE0)
+                }
+            },
+            CycleOperation::SpriteZeroCheck => {
+                // Unimplemented for now.
+            },
+            CycleOperation::SpriteOverflowCheck => {
+                // Unimplemented for now.
+            },
+            CycleOperation::SpriteLsb => {
+                // Unimplemented for now.
+            },
+            CycleOperation::SpriteMsb => {
+                // Unimplemented for now.
+            },
+            CycleOperation::IgnoredNameTableAccess => {},
+        }
+    }
 }
 
 struct Index {
@@ -264,7 +362,6 @@ struct Index {
 }
 
 const BLOCK_SIZE: u8 = 32; // Blocks are 32x32 pixels
-const HALF_BLOCK_SIZE: u8 = BLOCK_SIZE / 2;
 const TILE_SIZE: u8 = 8; // Tiles are 8x8.
 
 // Returns the Index for a specific pixel.
@@ -303,5 +400,11 @@ mod tests {
         assert_eq!(tile_y, 29);
         assert_eq!(fine_x, 6);
         assert_eq!(fine_y, 7);
+    }
+
+    #[test]
+    fn test_initialize_ppu() {
+        let ppu = Ppu::initialize();
+        println!("{:?}", ppu.frame_operations[0]);
     }
 }
