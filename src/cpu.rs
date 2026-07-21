@@ -1,7 +1,13 @@
 use crate::addressing_modes::PageBoundaryResult;
 use crate::addressing_modes::{AddressingMode, AddressingModeData, PageBoundaryResult::PageBoundaryCrossed};
 use crate::memory::CpuMemory;
+use crate::ppu::Ppu;
 use crate::processor_status::ProcessorStatus;
+use std::rc::Rc;
+use std::cell::RefCell;
+
+const NMI_ADDRESS: u16 = 0xFFFA;
+const RESET_ADDRESS: u16 = 0xFFFC;
 
 #[derive(Debug)]
 enum Opcode {
@@ -63,8 +69,21 @@ enum Opcode {
     TYA,
 }
 
+#[derive(Debug, PartialEq)]
+enum Nmi {
+    None,
+    CycleLatency(u8),
+    Interrupt,
+}
+
+struct Bus {
+    ppu: Rc<RefCell<Ppu>>,
+    // Eventually other peripherals will go here too.
+}
+
 pub struct Cpu {
     pub memory: CpuMemory,
+    bus: Bus,
     pub processor_status: ProcessorStatus,
     pub pc: u16,
     pub sp: u8,
@@ -72,12 +91,16 @@ pub struct Cpu {
     pub x: u8,
     pub y: u8,
     pub cycle_count: usize,
+    pub cycle_budget: i8, // when cycle_budget >= 0, we're allowed to execute cycles.
+    nmi: Nmi, // Starts at 7 and decrements down to 0 with our normal cycle count. When this
+              // happens we trigger an interrupt!
 }
 
 enum Cycles {
     Fixed(usize),
     PageCrossing(usize),
 }
+
 pub struct FetchInstructionResult {
     opcode: Opcode,
     addressing_mode: AddressingMode,
@@ -97,16 +120,52 @@ impl FetchInstructionResult {
 
 impl Cpu {
     pub fn initialize() -> Self {
+        let ppu = Rc::new(RefCell::new(Ppu::initialize()));
         Self {
-            memory: CpuMemory::initialize(),
+            memory: CpuMemory::initialize(ppu.clone()),
+            bus: Bus { ppu: ppu.clone() },
             processor_status: ProcessorStatus::initialize(),
-            pc: 0,
+            pc: RESET_ADDRESS,
             sp: 0xFD,
             a: 0,
             x: 0,
             y: 0,
             cycle_count: 0,
+            cycle_budget: 0,
+            nmi: Nmi::None,
         }
+    }
+
+    pub fn ppu(&mut self) -> Rc<RefCell<Ppu>> {
+        self.bus.ppu.clone()
+    }
+
+    pub fn to_string(&self) -> String {
+        format!("PC:0x{:04X}, A:0x{:02X}, X:0x{:02X}, Y:0x{:02X}, P:0x{:02X}, SP:0x{:02X}, CYC:{}, cyc_budget:{}, nmi:{:?}", self.pc, self.a, self.x, self.y, self.processor_status.into(), self.sp, self.cycle_count, self.cycle_budget, self.nmi)
+    }
+
+    pub fn set_nmi(&mut self) {
+        if let Nmi::None = self.nmi {
+            self.nmi = Nmi::CycleLatency(7); // Interrupt latency with 7 cycles.
+        }
+    }
+
+    fn dec_nmi(&mut self, cycles: u8) {
+        if let Nmi::CycleLatency(n) = self.nmi {
+            self.nmi = if cycles >= n {
+                Nmi::Interrupt
+            } else {
+                Nmi::CycleLatency(n - cycles)
+            }
+        }
+    }
+
+    fn is_nmi(&mut self) -> bool {
+        self.nmi == Nmi::Interrupt
+    }
+
+    fn clear_nmi(&mut self) {
+        self.nmi = Nmi::None;
     }
 
     fn increment_pc(&mut self) {
@@ -116,6 +175,14 @@ impl Cpu {
     fn push_stack(&mut self, m: u8) {
         self.memory.write_byte_to_stack(self.sp, m);
         self.sp = self.sp.wrapping_sub(1);
+    }
+
+    // Pushes the current PC to the stack. First $HH then $LL
+    fn push_pc(&mut self) {
+        let lo = self.pc as u8;
+        let hi = (self.pc >> 8) as u8;
+        self.push_stack(hi);
+        self.push_stack(lo);
     }
 
     fn pull_stack(&mut self) -> u8 {
@@ -1083,6 +1150,40 @@ impl Cpu {
         self.check_and_set_zero(self.a);
     }
 
+    // ----------- Interrupt Handling ------------- //
+    // According to the docs:
+    // 1. Recognize interrupt request has occurred.
+    // 2. Complete execution of the current instruction.
+    // 3. Push the program counter and status register on to the stack.
+    // 4. Set the interrupt disable flag to prevent further interrupts.
+    // 5. Load the address of the interrupt handling routine from the vector table into the program
+    // counter.
+    // 6. Execute the interrupt handling routine.
+    // 7. After executing a RTI (Return From Interrupt) instruction, pull the program counter and
+    // status register values from the stack.
+    // 8. Resume execution of the program. 
+    fn handle_nmi_interrupt(&mut self) {
+        // 1
+        if !self.is_nmi() {
+            return;
+        }
+        self.clear_nmi();
+
+        // 2 this is called after the current instruction.
+
+        // 3
+        self.push_pc();
+        self.push_stack(self.processor_status.into());
+
+        // 4
+        self.processor_status = self.processor_status.set_interrupt();
+
+        // 5
+        self.pc = self.memory.read_two_bytes(NMI_ADDRESS);
+
+        // Steps 6, 7, 8 will be done automatically.
+    }
+
     // ----------- Instruction Fetching ----------- //
 
     // A bit of a hack to deal with the variability of branch cycles.
@@ -1100,8 +1201,24 @@ impl Cpu {
         };
     }
 
-    pub fn fetch_instruction_and_execute(&mut self) {
+    // Attempts to execute the cycles for one instruction.
+    pub fn execute_cycles_for_one_instruction(&mut self) -> bool {
+        self.cycle_budget += 1;
+        if self.cycle_budget < 0 {
+            return false;
+        } 
+
+        let num_cycles = self.fetch_instruction_and_execute() as i8;
+        self.dec_nmi(num_cycles as u8);
+        self.cycle_budget -= num_cycles;
+        // Check if we have an interrupt (NMI) enabled.
+        self.handle_nmi_interrupt();
+        true
+    }
+
+    pub fn fetch_instruction_and_execute(&mut self) -> usize {
         let FetchInstructionResult { opcode, addressing_mode, cycles } = self.fetch_instruction();
+
         // Now our PC is at the next instruction, so offsets will be measured relative to that.
         let AddressingModeData { data, address, page_boundary_result } = addressing_mode.into_data(self);
         let pbc = page_boundary_result == PageBoundaryCrossed;
@@ -1203,6 +1320,7 @@ impl Cpu {
         }
 
         self.cycle_count += num_cycles;
+        num_cycles
     }
 }
 

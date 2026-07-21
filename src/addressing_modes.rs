@@ -1,5 +1,6 @@
 use crate::cpu::Cpu;
 
+#[derive(Debug)]
 pub enum AddressingMode {
     Implied,                // No data to fill in
     Immediate(u8),          // *($PC)
