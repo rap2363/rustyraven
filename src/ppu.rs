@@ -1,17 +1,9 @@
 use crate::memory::Segment;
-use crate::ppu_registers::{PpuControl, PpuStatus};
+use crate::ppu_registers::{PpuControl, PpuMask, PpuStatus, VramIncrement};
 
 const PRERENDER_SCANLINE: usize = 261;
 const NUM_SCANLINES: usize = 262;
 const NUM_DOTS: usize = 341;
-
-enum PpuRegister {
-    Control(u8),
-    Status(u8),
-    Scroll(u8),
-    Address(u8),
-    Data(u8),
-}
 
 // Address space from 0x0000 --> 0xFFFF, but
 // with mirrors from 0x4000 onward.
@@ -106,10 +98,37 @@ enum CycleOperation {
     SpriteMsb,
 }
 
+struct LatchedDataBuffer {
+    buffer: u8,
+    data: u8,
+}
+
+impl LatchedDataBuffer {
+    fn initialize() -> Self {
+        Self {
+            buffer: 0x00,
+            data: 0x00,
+        }
+    }
+
+    fn read(&mut self) -> u8 {
+        let data_to_return = self.buffer;
+        self.buffer = self.data;
+        data_to_return
+    }
+
+    fn write(&mut self, data: u8) {
+        self.data = data;
+    }
+}
+
 pub struct Ppu {
     memory: PpuMemory,
     control: PpuControl,
-    status: PpuStatus,
+    mask: PpuMask,
+    oam_address: u8,
+    oam_data: u8,
+    ppu_data: LatchedDataBuffer,
     loopy_v: u16,
     loopy_t: u16,
     fine_x: u8,
@@ -117,6 +136,9 @@ pub struct Ppu {
     frame_operations: Vec<[Vec<CycleOperation>; NUM_DOTS]>,
     frame_index: (usize, usize), // row, column,
     rendering_enabled: bool,
+    vblank: bool,
+    sprite_overflow: bool,
+    sprite_zero_hit: bool,
     name_table_address: u16,
     attribute_table_address: u16,
     pattern_table_byte_lo: u8,
@@ -187,7 +209,10 @@ impl Ppu {
         Self {
             memory: PpuMemory::initialize(),
             control: PpuControl::from(0x00),
-            status: PpuStatus::from(0x00),
+            mask: PpuMask::from(0x00),
+            oam_address: 0x00,
+            oam_data: 0x00,
+            ppu_data: LatchedDataBuffer::initialize(),
             loopy_v: 0x0000,
             loopy_t: 0x0000,
             fine_x: 0x00,
@@ -195,6 +220,9 @@ impl Ppu {
             frame_operations: frame_operations,
             frame_index: (PRERENDER_SCANLINE, 0), // Starts on the pre-render line
             rendering_enabled: false,
+            vblank: false,
+            sprite_overflow: false,
+            sprite_zero_hit: false,
             name_table_address: 0x2000,
             attribute_table_address: 0x23C0,
             pattern_table_byte_lo: 0x00,
@@ -202,27 +230,41 @@ impl Ppu {
         }
     }
 
-    pub fn control(&self) -> PpuControl {
-        self.control
+    pub fn vblank(&self) -> bool {
+        self.vblank
     }
 
-    pub fn status(&self) -> PpuStatus {
-        self.status
-    }
-
-    fn read_or_write_to_register_detected(&mut self, register: PpuRegister) {
-        match register {
-            PpuRegister::Control(d) => {
+    pub fn write_io_register(&mut self, address: u16, data: u8) {
+        match address {
+            // PPU Control
+            0x2000 => {
+                self.control = PpuControl::from(data);
                 // t: ...GH.. ........ <- d: ......GH
                 // Bit shift left 10 times and clear bits 11 and 12 in t
-                self.loopy_t = (((d & 0x03) as u16) << 10) | (self.loopy_t & 0xF3FF);
+                self.loopy_t = (((self.control.into() & 0x03) as u16) << 10) | (self.loopy_t & 0xF3FF);
             },
-            PpuRegister::Status(d) => {
-                self.loopy_w = WriteToggle::First;
+            // PPU Mask
+            0x2001 => {
+                self.mask = PpuMask::from(data);
             },
-            PpuRegister::Scroll(d) => {
-                let fine_x = d & 0x07;
-                let upper_five = (d & 0xF8) >> 3;
+            // PPU Status
+            0x2002 => {
+                // Ignore these writes, but log anyway.
+                println!("CPU write to PPU Status register detected: 0x{:4X}, 0x{:2X}", address, data);
+            },
+            // OAM Address 
+            0x2003 => {
+                self.oam_address = data;
+            },
+            // OAM Data
+            0x2004 => {
+                self.oam_data = data;
+            },
+            // PPU Scroll
+            0x2005 => {
+                let ppu_scroll = data;
+                let fine_x = ppu_scroll & 0x07;
+                let upper_five = (ppu_scroll & 0xF8) >> 3;
                 match self.loopy_w {
                     // t: ....... ...ABCDE <- d: ABCDE...
                     // x:              FGH <- d: .....FGH
@@ -240,8 +282,10 @@ impl Ppu {
                     },
                 }
             },
-            PpuRegister::Address(d) => {
-                let lower_six = d & 0x3F;
+            // PPU Address
+            0x2006 => {
+                let ppu_address = data;
+                let lower_six = ppu_address & 0x3F;
                 match self.loopy_w {
                     // t: .CDEFGH ........ <- d: ..CDEFGH
                     //        <unused>     <- d: AB......
@@ -257,16 +301,122 @@ impl Ppu {
                     //    (wait 1 to 1.5 dots after the write completes)
                     // v: <...all bits...> <- t: <...all bits...>
                     WriteToggle::Second => {
-                        self.loopy_t = (self.loopy_t & 0xFF00) | (d as u16);
+                        self.loopy_t = (self.loopy_t & 0xFF00) | (ppu_address as u16);
                         self.loopy_w = WriteToggle::First;
                         // TODO: Should we latch this one cycle?
                         self.loopy_v = self.loopy_t;
                     },
                 }
             },
-            PpuRegister::Data(d) => {
-                self.loopy_v += self.control.vram_address_increment();
+            // PPU Data
+            0x2007 => {
+                // Write the data to memory
+                self.memory.write_byte(self.loopy_v, data);
+                // Write the byte to our latch too
+                self.ppu_data.write(data);
+                // Increment VRAM address
+                match self.control.vram_address_increment() {
+                    VramIncrement::CoarseX => self.increment_coarse_x(),
+                    VramIncrement::Y => self.increment_y(),
+                }
             },
+            _ => panic!("Unimplemented address written to: 0x{:4X}, 0x{:2X}", address, data),
+        }
+    }
+
+    pub fn read_io_register(&mut self, address: u16) -> u8 {
+        match address {
+            // PPU Control
+            0x2000 => self.control.into(),
+            // PPU Mask
+            0x2001 => self.mask.into(),
+            // PPU Status
+            0x2002 => {
+                // Build this byte up from our status flags.
+                // 7  bit  0
+                // ---- ----
+                // VSOx xxxx
+                // |||| ||||
+                // |||+-++++- (PPU open bus or 2C05 PPU identifier)
+                // ||+------- Sprite overflow flag
+                // |+-------- Sprite 0 hit flag
+                // +--------- Vblank flag, cleared on read.
+                let v_bit = if self.vblank { 0x80 } else { 0x00 };
+                let s_bit = if self.sprite_overflow { 0x40 } else { 0x00 };
+                let z_bit = if self.sprite_zero_hit { 0x20 } else { 0x00 };
+                // Clear the VBlank flag.
+                self.vblank = false;
+                v_bit | s_bit | z_bit
+            },
+            // OAM Address 
+            0x2003 => self.oam_address,
+            // OAM Data
+            0x2004 => self.oam_data,
+            // PPU Scroll
+            0x2005 => {
+                // We shouldn't be reading from this, but return 0x00 if we do.
+                // TODO: Should we return something else?
+                0x00
+            },
+            // PPU Address
+            0x2006 => {
+                // We shouldn't be reading from this, but return 0x00 if we do
+                // TODO: Should we return something else?
+                0x00
+            },
+            // PPU Data
+            0x2007 => {
+                self.ppu_data.read()
+            },
+            _ => panic!("Unimplemented address read from: 0x{:4X}", address),
+        }
+    }
+
+    // See https://www.nesdev.org/wiki/PPU_scrolling for details.
+    // This diagram is particularly helpful:
+    //
+    // yyy NN YYYYY XXXXX
+    // ||| || ||||| +++++-- coarse X scroll (what we're adjusting here)
+    // ||| || +++++-------- coarse Y scroll
+    // ||| ++-------------- nametable select
+    // +++----------------- fine Y scroll
+    fn increment_coarse_x(&mut self) {
+        // If coarse X == 31, we just need to wrap around to 0.
+        if self.loopy_v & 0x001F == 31 {
+            self.loopy_v &= 0xFFE0;
+            // And also switch the horiztonal nametable.
+            self.loopy_v ^= 0x0400;
+        } else {
+            self.loopy_v += 1;
+        }
+    }
+
+    // See https://www.nesdev.org/wiki/PPU_scrolling for details.
+    // This diagram is particularly helpful:
+    //
+    // yyy NN YYYYY XXXXX
+    // ||| || ||||| +++++-- coarse X scroll
+    // ||| || +++++-------- coarse Y scroll
+    // ||| ++-------------- nametable select
+    // +++----------------- fine Y scroll
+    fn increment_y(&mut self) {
+        // If fine y < 7
+        if self.loopy_v & 0x7000 != 0x7000 {
+            self.loopy_v += 0x1000; // Increment fine y
+        } else {
+            self.loopy_v &= 0x1FFF; // Zero out the fine y.
+            let mut coarse_y = (self.loopy_v & 0x03E0) >> 5;
+            if coarse_y == 29 {
+                coarse_y = 0;
+                // Switch vertical nametable (we do this 2 rows "early" for some reason)
+                self.loopy_v ^= 0x0800;
+            } else if coarse_y == 31 {
+                coarse_y = 0; // But don't switch the nametable
+            } else {
+                coarse_y += 1;
+            }
+            // Now stuff 'er back in there lad
+            self.loopy_v = (self.loopy_v & 0xFC1F) | (coarse_y << 5)
         }
     }
 
@@ -307,19 +457,19 @@ impl Ppu {
                 self.pattern_table_byte_hi = self.memory.read_byte(self.control.base_name_table_address() + (2 * pattern_table_index as u16) + 1);
             },
             CycleOperation::IncrementHorizontalV => {
-                self.loopy_v += 1;
+                self.increment_coarse_x();
                 // Incrementing the horizontal VRAM address means building a pixel line and rendering!
                 // if self.rendering_enabled() && self.frame_index.1
                 // self.render_pixels()
             },
             CycleOperation::IncrementVerticalV => {
-                self.loopy_v += 32;
+                self.increment_y();
             },
             CycleOperation::ClearVblank => {
-                self.status = self.status.clear_vblank();
+                self.vblank = false;
             },
             CycleOperation::SetVblank => {
-                self.status = self.status.set_vblank();
+                self.vblank = true;
             },
             CycleOperation::EqualizeHorizontalVT => {
                 if self.rendering_enabled {

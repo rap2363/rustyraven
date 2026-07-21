@@ -16,6 +16,11 @@ enum SpriteSize {
     EightBySixteen,
 }
 
+pub enum VramIncrement {
+    CoarseX,
+    Y,
+}
+
 impl PpuControl {
     pub fn from(byte: u8) -> Self {
         Self(byte)
@@ -41,8 +46,8 @@ impl PpuControl {
         (self.0 & 0x08) as u16
     }
 
-    pub fn vram_address_increment(self) -> u16 {
-        if (self.0 >> 2 & 0x01) == 0x00 { 1 } else { 32 }
+    pub fn vram_address_increment(self) -> VramIncrement {
+        if (self.0 >> 2 & 0x01) == 0x00 { VramIncrement::CoarseX } else { VramIncrement::Y }
     }
 
     pub fn base_name_table_address(self) -> u16 {

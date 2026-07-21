@@ -1,7 +1,10 @@
 use crate::addressing_modes::PageBoundaryResult;
 use crate::addressing_modes::{AddressingMode, AddressingModeData, PageBoundaryResult::PageBoundaryCrossed};
 use crate::memory::CpuMemory;
+use crate::ppu::Ppu;
 use crate::processor_status::ProcessorStatus;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 const NMI_ADDRESS: u16 = 0xFFFA;
 const RESET_ADDRESS: u16 = 0xFFFC;
@@ -73,8 +76,14 @@ enum Nmi {
     Interrupt,
 }
 
+struct Bus {
+    ppu: Rc<RefCell<Ppu>>,
+    // Eventually other peripherals will go here too.
+}
+
 pub struct Cpu {
     pub memory: CpuMemory,
+    bus: Bus,
     pub processor_status: ProcessorStatus,
     pub pc: u16,
     pub sp: u8,
@@ -111,8 +120,10 @@ impl FetchInstructionResult {
 
 impl Cpu {
     pub fn initialize() -> Self {
+        let ppu = Rc::new(RefCell::new(Ppu::initialize()));
         Self {
-            memory: CpuMemory::initialize(),
+            memory: CpuMemory::initialize(ppu.clone()),
+            bus: Bus { ppu: ppu.clone() },
             processor_status: ProcessorStatus::initialize(),
             pc: RESET_ADDRESS,
             sp: 0xFD,
@@ -123,6 +134,10 @@ impl Cpu {
             cycle_budget: 0,
             nmi: Nmi::None,
         }
+    }
+
+    pub fn ppu(&mut self) -> Rc<RefCell<Ppu>> {
+        self.bus.ppu.clone()
     }
 
     pub fn to_string(&self) -> String {

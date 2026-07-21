@@ -22,18 +22,23 @@ impl<const N: usize> Segment<N> {
     }
 }
 
+use std::rc::Rc;
+use std::cell::RefCell;
+use crate::ppu::Ppu;
 pub struct CpuMemory {
     ram: Segment<0x0800>,
     lower_io: Segment<0x0008>,
     upper_memory: Segment<0xC000>,
+    ppu: Rc<RefCell<Ppu>>,
 }
 
 impl CpuMemory {
-    pub fn initialize() -> Self {
+    pub fn initialize(ppu: Rc<RefCell<Ppu>>) -> Self {
         Self {
             ram: Segment::<0x0800>::initialize(),
             lower_io: Segment::<0x0008>::initialize(),
             upper_memory: Segment::<0xC000>::initialize(),
+            ppu: ppu,
         }
     }
 
@@ -51,9 +56,11 @@ impl CpuMemory {
             let ram_address = address % 0x0800;
             self.ram.write_byte(ram_address as usize, value);
         } else if address < 0x4000 {
-            // Lower I/O
+            // Lower I/O (Ppu registers)
             let lower_io_address = (address - 0x2000) % 0x0008;
             self.lower_io.write_byte(lower_io_address as usize, value);
+            // Write to the appropriate ppu listener.
+            self.ppu.borrow_mut().write_io_register(0x2000 + lower_io_address, value);
         } else {
             // Upper Memory
             let upper_memory_address = address - 0x4000;
@@ -75,7 +82,10 @@ impl CpuMemory {
         } else if address < 0x4000 {
             // Lower I/O
             let lower_io_address = (address - 0x2000) % 0x0008;
-            self.lower_io.read_byte(lower_io_address as usize)
+            // Read from the appropriate I/O register, *not* directly from memory!
+            // Note we require a mutable reference to the PPU (this is because the read actually causes
+            // some state change within the PPU potentially (e.g. the clearing of vblank)).
+            self.ppu.borrow_mut().read_io_register(0x2000 + lower_io_address)
         } else {
             // Upper Memory
             let upper_memory_address = address - 0x4000;
@@ -136,7 +146,8 @@ mod tests {
 
     #[test]
     fn test_memory_mirroring() {
-        let mut cpu_memory = CpuMemory::initialize();
+        let ppu = Ppu::initialize();
+        let mut cpu_memory = CpuMemory::initialize(Rc::new(RefCell::new(ppu)));
         cpu_memory.write_byte(0x0803, 42);
         cpu_memory.write_byte(0x2009, 43);
         // Assert that the write can be read in a "mirrored" way throughout RAM.
