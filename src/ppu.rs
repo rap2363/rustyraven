@@ -137,6 +137,7 @@ pub struct Ppu {
     frame_index: (usize, usize), // row, column,
     rendering_enabled: bool,
     vblank: bool,
+    nmi: bool,
     sprite_overflow: bool,
     sprite_zero_hit: bool,
     name_table_address: u16,
@@ -221,6 +222,7 @@ impl Ppu {
             frame_index: (PRERENDER_SCANLINE, 0), // Starts on the pre-render line
             rendering_enabled: false,
             vblank: false,
+            nmi: false,
             sprite_overflow: false,
             sprite_zero_hit: false,
             name_table_address: 0x2000,
@@ -234,11 +236,16 @@ impl Ppu {
         self.vblank
     }
 
+    pub fn nmi(&self) -> bool {
+        self.nmi
+    }
+
     pub fn write_io_register(&mut self, address: u16, data: u8) {
         match address {
             // PPU Control
             0x2000 => {
                 self.control = PpuControl::from(data);
+                self.nmi = data & 0x80 == 0x80;
                 // t: ...GH.. ........ <- d: ......GH
                 // Bit shift left 10 times and clear bits 11 and 12 in t
                 self.loopy_t = (((self.control.into() & 0x03) as u16) << 10) | (self.loopy_t & 0xF3FF);

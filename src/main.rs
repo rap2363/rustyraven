@@ -1,5 +1,3 @@
-use std::{fmt, fs};
-
 mod addressing_modes;
 mod cpu;
 mod memory;
@@ -7,6 +5,8 @@ mod ppu;
 mod ppu_registers;
 mod processor_status;
 mod rom;
+
+// use std::collections::HashSet;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let nes_rom = rom::NesRom::from_file_path("src/resources/donkey_kong.nes")?;
@@ -26,8 +26,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cpu.cycle_count = 7;
 
     let mut i = 0;
-    // let mut vblank_latch = false;
-    while i <= 10000000 {
+    // let mut vblank_latch = true;
+    // let mut seen_data = HashSet::new();
+
+    loop {
         // Execute one cycle for the CPU
         let _b = cpu.execute_cycles_for_one_instruction();
         // Execute 3 cycles for the ppu.
@@ -36,17 +38,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ppu.borrow_mut().execute_cycle();
         ppu.borrow_mut().execute_cycle();
 
-        // Copy over PPU registers.
-        // cpu.memory.write_byte(0x2000, ppu.borrow().control().into());
-        // cpu.memory.write_byte(0x2002, ppu.borrow().status().into());
-        if cpu.ppu().borrow().vblank() {
+        // Check for an NMI and set the interrupt.
+        if cpu.ppu().borrow().nmi() && cpu.ppu().borrow_mut().read_io_register(0x2002) & 0x80 == 0x80 {
             cpu.set_nmi();
         }
 
-        let data = cpu.memory.read_byte(0x2007);
-        if data != 0x0 && data != 0x24 {
-            println!("0x{:04X}=0x{:02X}", 0x2007, data);
-        }
+        // Check for a vblank and set the interrupt.
+        // if cpu.ppu().borrow().vblank() && vblank_latch {
+        //     cpu.set_nmi();
+        //     vblank_latch = false;
+        // }
+
+        // if !cpu.ppu().borrow().vblank() && !vblank_latch {
+        //     vblank_latch = true;
+        // }
+
+        // let data = cpu.memory.read_byte(0x2007);
+        // if !seen_data.contains(&data) {
+        //     println!("0x{:04X}=0x{:02X}", 0x2007, data);
+        //     seen_data.insert(data);
+        // }
+
+        // println!("{:?}", cpu.to_string());
 
         // if !ppu.borrow().status().is_vblank() && vblank_latch {
         //     // Turn the latch back off when we clear the vblank.
