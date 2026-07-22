@@ -16,6 +16,7 @@ enum SpriteSize {
     EightBySixteen,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum VramIncrement {
     CoarseX,
     Y,
@@ -138,7 +139,7 @@ mod tests {
         let ppu_control = PpuControl(0x82);
         assert_eq!(ppu_control.base_name_table_address(), 0x2800);
         assert_eq!(ppu_control.sprite_size(), SpriteSize::EightByEight);
-        assert_eq!(ppu_control.vram_address_increment(), 1);
+        assert_eq!(ppu_control.vram_address_increment(), VramIncrement::CoarseX);
         assert!(ppu_control.is_nmi());
     }
 }
