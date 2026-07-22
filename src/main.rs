@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cpu.memory.write_bytes(0x8000, &nes_rom.prg_rom_data);
     // NROM means we write it to the lower and upper banks.
     cpu.memory.write_bytes(0xC000, &nes_rom.prg_rom_data);
+    cpu.ppu().borrow_mut().write_chr_rom_data(&nes_rom.chr_rom_data);
 
     println!("NMI Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFA));
     println!("RES Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFC));

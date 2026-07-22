@@ -1048,18 +1048,7 @@ impl Cpu {
     // A <- A - M - !C
     // Affects Flags: N Z C V
     fn sbc(&mut self, m: u8) {
-        let extended_result = (self.a as u16) + (m.wrapping_neg() as u16) + if !self.processor_status.is_carry() { 0x01_u8.wrapping_neg() as u16 } else { 0x0000 };
-        let c = (extended_result >> 8) & 0x0001 == 0x0001;
-
-        let result = extended_result as u8;
-
-        // Flags
-        self.check_and_set_negative(result);
-        self.check_and_set_overflow(self.a, m.wrapping_neg(),result);
-        self.check_and_set_zero(result);
-        self.check_and_set_carry(c);
-
-        self.a = result as u8;
+        self.adc(!m);
     }
 
     // Set the carry flag.
@@ -1331,6 +1320,7 @@ mod tests {
     #[test]
     fn test_adc() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x0000;
         cpu.a = 0x03F;
         cpu.processor_status = ProcessorStatus::initialize().set_carry();
         cpu.memory.write_bytes(0x00, &[0x69, 0x02]);
@@ -1347,6 +1337,7 @@ mod tests {
     #[test]
     fn test_and() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x0000;
         cpu.a = 0xFF;
         cpu.memory.write_bytes(0x00, &[0x29, 0x42]);
         cpu.fetch_instruction_and_execute();
@@ -1360,6 +1351,7 @@ mod tests {
     #[test]
     fn test_asl() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x0000;
         cpu.a = 0x80;
         cpu.memory.write_bytes(0x00, &[0x0A, 0x06, 0x42]);
         cpu.memory.write_byte(0x0042, 0x40);
@@ -1387,6 +1379,7 @@ mod tests {
     #[test]
     fn test_bcc_and_bcs() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x0000;
         cpu.memory.write_bytes(0x00, &[0x90, 0x40]);
         cpu.memory.write_bytes(0x0042, &[0xB0, 0xFF, 0xB0, 0xFF]);
 
@@ -1400,8 +1393,8 @@ mod tests {
         cpu.processor_status = cpu.processor_status.set_carry();
         cpu.fetch_instruction_and_execute();
 
-        assert_eq!(0x0046 + 0x00FF, cpu.pc);
-        assert_eq!(3 + 2 + 4, cpu.cycle_count);
+        assert_eq!(0x0046 - 1, cpu.pc);
+        assert_eq!(3 + 2 + 3, cpu.cycle_count);
         // After fetching two more we will have *not* branched once and then branched
         // after the carry was set.
     }
@@ -1410,6 +1403,7 @@ mod tests {
     #[test]
     fn test_bit() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.a = 0x0F;
         cpu.memory.write_bytes(0x00, &[0x24, 0x42]);
         cpu.memory.write_byte(0x0042, 0xF0);
@@ -1424,6 +1418,7 @@ mod tests {
     #[test]
     fn test_break() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.processor_status = ProcessorStatus::from(0x42);
         cpu.fetch_instruction_and_execute();
 
@@ -1440,6 +1435,7 @@ mod tests {
     #[test]
     fn test_cmp() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.a = 0x42;
         cpu.memory.write_bytes(0x00, &[0xC9, 0x43, 0xC9, 0x42, 0xC9, 0x41]);
 
@@ -1462,6 +1458,7 @@ mod tests {
     #[test]
     fn test_dec() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         // We'll decrement three times (the last one will be using the absolute addressing mode)
         cpu.memory.write_bytes(0x00, &[0xC6, 0x42, 0xC6, 0x42, 0xCE, 0x42, 0x00]);
         cpu.memory.write_byte(0x42, 0x02);
@@ -1488,6 +1485,7 @@ mod tests {
     #[test]
     fn test_jmp() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.memory.write_bytes(0x00, &[0x4C, 0x34, 0x12]);
 
         cpu.fetch_instruction_and_execute();
@@ -1498,6 +1496,7 @@ mod tests {
     #[test]
     fn test_jmp_indirect() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.memory.write_bytes(0x00, &[0x6C, 0xFF, 0x11]);
         cpu.memory.write_byte(0x11FF, 0x34);
         cpu.memory.write_byte(0x1100, 0x12);
@@ -1525,6 +1524,7 @@ mod tests {
     #[test]
     fn test_loads() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.memory.write_bytes(0x00, &[0xA9, 0x42]);
 
         cpu.fetch_instruction_and_execute();
@@ -1536,6 +1536,7 @@ mod tests {
     #[test]
     fn test_lsr() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.a = 0xF3; // 1 1 1 1 0 0 1 1
         cpu.memory.write_bytes(0x00, &[0x4A, 0x46, 0x42]);
         cpu.memory.write_byte(0x0042, 0x01);
@@ -1564,6 +1565,7 @@ mod tests {
     #[test]
     fn test_ora_and_eor() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.a = 0x50;
         cpu.memory.write_bytes(0x00, &[0x09, 0x05, 0x49, 0xAA]);
 
@@ -1583,6 +1585,7 @@ mod tests {
     #[test]
     fn test_rol_and_ror() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.a = 0xF3; // 1 1 1 1 0 0 1 1
         cpu.memory.write_bytes(0x00, &[0x6A, 0x26, 0x42]);
         cpu.memory.write_byte(0x0042, 0x7F);
@@ -1612,6 +1615,7 @@ mod tests {
     #[test]
     fn test_rti() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.memory.write_byte(0x00, 0x40);
         // Write to the stack directly like a maniac (as if we had done a BRK).
         cpu.push_stack(0x12);
@@ -1627,6 +1631,7 @@ mod tests {
     #[test]
     fn test_rts() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         // Jump to a subroutine where we load X, then come back and load the accumulator.
         // JSR #0x1234; LDA #0x42;
         cpu.memory.write_bytes(0x00, &[0x20, 0x34, 0x12, 0xA9, 0x42]);
@@ -1649,6 +1654,7 @@ mod tests {
     #[test]
     fn test_sbc() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.a = 0x03F;
         cpu.memory.write_bytes(0x00, &[0xE9, 0x02]);
         cpu.fetch_instruction_and_execute();
@@ -1658,12 +1664,13 @@ mod tests {
         assert!(!cpu.processor_status.is_overflow());
         assert!(!cpu.processor_status.is_negative());
         assert!(!cpu.processor_status.is_zero());
-        assert!(!cpu.processor_status.is_carry());
+        assert!(cpu.processor_status.is_carry());
     }
 
     #[test]
     fn test_sta() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.a = 0x42;
         cpu.memory.write_bytes(0x00, &[0x8D, 0x34, 0x12]);
 
@@ -1674,6 +1681,7 @@ mod tests {
     #[test]
     fn test_tax() {
         let mut cpu = Cpu::initialize();
+        cpu.pc = 0x00;
         cpu.a = 0xF2;
         cpu.memory.write_bytes(0x00, &[0xAA, 0x9A]);
 

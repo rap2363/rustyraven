@@ -122,6 +122,23 @@ impl LatchedDataBuffer {
     }
 }
 
+struct ShiftRegister(u16);
+
+impl ShiftRegister {
+
+    fn initialize() -> Self {
+        Self(0x0000)
+    }
+
+    fn push(&mut self, byte: u8) {
+        self.0 = (self.0 << 8) | (byte as u16);
+    }
+
+    fn get(&self) -> u8 {
+        ((self.0 & 0xFF00) >> 8) as u8
+    }
+}
+
 pub struct Ppu {
     memory: PpuMemory,
     control: PpuControl,
@@ -143,6 +160,8 @@ pub struct Ppu {
     attribute_table_address: u16,
     pattern_table_byte_lo: u8,
     pattern_table_byte_hi: u8,
+    pattern_byte_sr_hi: ShiftRegister,
+    pattern_byte_sr_lo: ShiftRegister,
     pixel_lines: Vec<String>,
     name_table_lines: Vec<String>,
 }
@@ -229,9 +248,15 @@ impl Ppu {
             attribute_table_address: 0x23C0,
             pattern_table_byte_lo: 0x00,
             pattern_table_byte_hi: 0x00,
+            pattern_byte_sr_hi: ShiftRegister::initialize(),
+            pattern_byte_sr_lo: ShiftRegister::initialize(),
             pixel_lines: vec![],
             name_table_lines: vec![],
         }
+    }
+
+    pub fn write_chr_rom_data(&mut self, data: &[u8]) {
+        self.memory.write_bytes(0x00, data);
     }
 
     pub fn vblank(&self) -> bool {
@@ -472,7 +497,7 @@ impl Ppu {
     // +--------------- 0: Pattern table is at $0000-$1FFF
     fn execute_operation(&mut self, operation: CycleOperation) {
         // TODO: Is this right?
-         // Vblank flag maintenance happens regardless of rendering state.
+         // Vblank flag maintenance happens regardless of rendering state. Otherwise skip if we're not rendering.
         match operation {
             CycleOperation::SetVblank | CycleOperation::ClearVblank => {},
             _ => {
@@ -483,6 +508,7 @@ impl Ppu {
                 }
             },
         }
+
         match operation {
             CycleOperation::NameTableAccess | CycleOperation::UnusedNameTableAccess => {
                 let name_table_addr = 0x2000 | (self.loopy_v & 0x07FF);
@@ -503,22 +529,30 @@ impl Ppu {
             },
             CycleOperation::IncrementHorizontalV => {
                 // Incrementing the horizontal VRAM address means building a pixel line and rendering!
-                if self.rendering_enabled() {
-                    // Get a pixel line from the high and low bytes
-                    let mut pixel_line = String::new();
-                    for i in 0..8 {
-                        let hi = (self.pattern_table_byte_hi >> (7 - i)) & 0x01;
-                        let lo = (self.pattern_table_byte_lo >> (7 - i)) & 0x01;
-                        let value = ((hi << 1) | lo) & 0x3;
-                        pixel_line += &value.to_string();
-                    }
-                    if self.frame_index.0 < 240 && self.frame_index.1 < 257 {
-                        self.pixel_lines.push(pixel_line);
-                        if self.frame_index.0 % 8 == 0 {
-                            self.name_table_lines.push(format!("{:2X}", self.name_table_byte));
-                        }
+
+                // Get a pixel line from the high and low bytes
+                let mut pixel_line = String::new();
+                for i in 0..8 {
+                    let hi = self.pattern_byte_sr_hi.get() >> (7 - self.fine_x - i) & 0x01;
+                    let lo = self.pattern_byte_sr_lo.get() >> (7 - self.fine_x - i) & 0x01;
+                    // let hi = (((self.pattern_byte_shift_register_hi & 0xFF00) >> (15 - self.fine_x - i)) as u8) & 0x01;
+                    // let lo = (((self.pattern_byte_sr_lo & 0xFF00) >> (15 - self.fine_x - i)) as u8) & 0x01;
+                    let value = ((hi << 1) | lo) & 0x3;
+                    pixel_line += &value.to_string();
+                }
+                if self.frame_index.0 < 240 && self.frame_index.1 < 257 {
+                    self.pixel_lines.push(pixel_line);
+
+                    if self.frame_index.0 % 8 == 0 {
+                        self.name_table_lines.push(format!("{:2X}", self.name_table_byte));
                     }
                 }
+
+                // Shift the pixels
+                self.pattern_byte_sr_hi.push(self.pattern_table_byte_hi);
+                self.pattern_byte_sr_lo.push(self.pattern_table_byte_lo);
+                // self.pattern_byte_shift_register_hi = self.pattern_byte_shift_register_hi << 8 | (self.pattern_table_byte_hi as u16);
+                // self.pattern_byte_sr_lo = self.pattern_byte_sr_lo << 8 | (self.pattern_table_byte_lo as u16);
                 self.increment_coarse_x();
             },
             CycleOperation::IncrementVerticalV => {
@@ -531,20 +565,21 @@ impl Ppu {
                 self.vblank = true;
                 if self.pixel_lines.len() > 0 {
                     let mut i = 0;
-                    // for pixel_line in self.pixel_lines.iter() {
-                    //     i += 1;
-                    //     print!("{}", pixel_line);
-                    //     if i % 32 == 0 {
-                    //         println!("");
-                    //     }
-                    // }
-                    for name_table_line in self.name_table_lines.iter() {
+                    for pixel_line in self.pixel_lines.iter() {
                         i += 1;
-                        print!("{} ", name_table_line);
+                        print!("{}", pixel_line);
                         if i % 32 == 0 {
                             println!("");
                         }
                     }
+                    // for name_table_line in self.name_table_lines.iter() {
+                    //     i += 1;
+                    //     print!("{} ", name_table_line);
+                    //     if i % 32 == 0 {
+                    //         println!("");
+                    //     }
+                    // }
+                    println!("");
                     self.pixel_lines.clear();
                     self.name_table_lines.clear();
                 }
