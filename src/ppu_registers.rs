@@ -38,8 +38,8 @@ impl PpuControl {
         if (self.0 >> 5 & 0x01) == 0x00 { SpriteSize::EightByEight } else { SpriteSize::EightBySixteen }
     }
 
-    pub fn bg_pattern_table_address(self) -> u16 {
-        ((self.0 >> 4 & 0x01) << 3) as u16
+    pub fn bg_pattern_table_half(self) -> u8 {
+        self.0 >> 4 & 0x01
     }
 
     pub fn sprite_pattern_table_address(self) -> u16 {
