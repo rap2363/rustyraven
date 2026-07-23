@@ -4,6 +4,7 @@ use crate::ppu_registers::{PpuControl, PpuMask, PpuStatus, VramIncrement};
 const PRERENDER_SCANLINE: usize = 261;
 const NUM_SCANLINES: usize = 262;
 const NUM_DOTS: usize = 341;
+const PALETTE_RAM: u16 = 0x3F00;
 
 // Address space from 0x0000 --> 0xFFFF, but
 // with mirrors from 0x4000 onward.
@@ -15,6 +16,99 @@ struct PpuMemory {
     // 0x3F00 --> 0x3F20 (with mirrors up to 0x4000)
     palletes: Segment<0x0040>,
 }
+
+// Red-Green-Blue
+#[derive(Clone, Copy)]
+struct Pixel(u8, u8, u8);
+
+impl Pixel {
+    fn to_string(&self) -> String {
+        if self.0 == self.1 && self.1 == self.2 {
+            // Return black
+            "⚫".to_string()
+        } else if self.0 > self.1 {
+            // Return Red
+            "🔴".to_string()
+        } else if self.1 > self.2 {
+            // Return blue
+            "🔵".to_string()
+        } else {
+            // Return green
+            "🟢".to_string()
+        }
+    }
+}
+
+// I stole this from myself (WhiteRaven)
+const SYSTEM_PALETTE_COLORS: [Pixel; 64] = [
+    Pixel(0x75, 0x75, 0x75), // 0x00
+    Pixel(0x27, 0x1B, 0x8F), // 0x01
+    Pixel(0x00, 0x00, 0xAB), // 0x02
+    Pixel(0x47, 0x00, 0x9F), // 0x03
+    Pixel(0x8F, 0x00, 0x77), // 0x04
+    Pixel(0xAB, 0x00, 0x13), // 0x05
+    Pixel(0xA7, 0x00, 0x00), // 0x06
+    Pixel(0x7F, 0x0B, 0x00), // 0x07
+    Pixel(0x43, 0x2F, 0x00), // 0x08
+    Pixel(0x00, 0x47, 0x00), // 0x09
+    Pixel(0x00, 0x51, 0x00), // 0x0A
+    Pixel(0x00, 0x3F, 0x17), // 0x0B
+    Pixel(0x1B, 0x3F, 0x5F), // 0x0C
+    Pixel(0x00, 0x00, 0x00), // 0x0D
+    Pixel(0x00, 0x00, 0x00), // 0x0E
+    Pixel(0x00, 0x00, 0x00), // 0x0F
+
+    Pixel(0xBC, 0xBC, 0xBC), // 0x10
+    Pixel(0x00, 0x73, 0xEF), // 0x11
+    Pixel(0x23, 0x3B, 0xEF), // 0x12
+    Pixel(0x83, 0x00, 0xF3), // 0x13
+    Pixel(0xBF, 0x00, 0xBF), // 0x14
+    Pixel(0xE7, 0x00, 0x5B), // 0x15
+    Pixel(0xDB, 0x2B, 0x00), // 0x16
+    Pixel(0xCB, 0x4F, 0x0F), // 0x17
+    Pixel(0x8B, 0x73, 0x00), // 0x18
+    Pixel(0x00, 0x97, 0x00), // 0x19
+    Pixel(0x00, 0xAB, 0x00), // 0x1A
+    Pixel(0x00, 0x93, 0x3B), // 0x1B
+    Pixel(0x00, 0x83, 0x8B), // 0x1C
+    Pixel(0x00, 0x00, 0x00), // 0x1D
+    Pixel(0x00, 0x00, 0x00), // 0x1E
+    Pixel(0x00, 0x00, 0x00), // 0x1F
+
+    Pixel(0xFF, 0xFF, 0xFF), // 0x20
+    Pixel(0x3F, 0xBF, 0xFF), // 0x21
+    Pixel(0x5F, 0x97, 0xFF), // 0x22
+    Pixel(0xA7, 0x8B, 0xFD), // 0x23
+    Pixel(0xF7, 0x7B, 0xFF), // 0x24
+    Pixel(0xFF, 0x77, 0xB7), // 0x25
+    Pixel(0xFF, 0x77, 0x63), // 0x26
+    Pixel(0xFF, 0x9B, 0x3B), // 0x27
+    Pixel(0xF3, 0xBF, 0x3F), // 0x28
+    Pixel(0x83, 0xD3, 0x13), // 0x29
+    Pixel(0x4F, 0xDF, 0x4B), // 0x2A
+    Pixel(0x58, 0xF8, 0x98), // 0x2B
+    Pixel(0x00, 0xEB, 0xDB), // 0x2C
+    Pixel(0x00, 0x00, 0x00), // 0x2D
+    Pixel(0x00, 0x00, 0x00), // 0x2E
+    Pixel(0x00, 0x00, 0x00), // 0x2F
+
+    Pixel(0xFF, 0xFF, 0xFF), // 0x30
+    Pixel(0xAB, 0xE7, 0xFF), // 0x31
+    Pixel(0xC7, 0xD7, 0xFF), // 0x32
+    Pixel(0xD7, 0xCB, 0xFF), // 0x33
+    Pixel(0xFF, 0xC7, 0xFF), // 0x34
+    Pixel(0xFF, 0xC7, 0xDB), // 0x35
+    Pixel(0xFF, 0xBF, 0xB3), // 0x36
+    Pixel(0xFF, 0xDB, 0xAB), // 0x37
+    Pixel(0xFF, 0xE7, 0xA3), // 0x38
+    Pixel(0xE3, 0xFF, 0xA3), // 0x39
+    Pixel(0xAB, 0xF3, 0xBF), // 0x3A
+    Pixel(0xB3, 0xFF, 0xCF), // 0x3B
+    Pixel(0x9F, 0xFF, 0xF3), // 0x3C
+    Pixel(0x00, 0x00, 0x00), // 0x3D
+    Pixel(0x00, 0x00, 0x00), // 0x3E
+    Pixel(0x00, 0x00, 0x00), // 0x3F
+];
 
 impl PpuMemory {
      pub fn initialize() -> Self {
@@ -31,13 +125,13 @@ impl PpuMemory {
         if address < 0x2000 {
             // Pattern Tables
             self.pattern_tables.write_byte(address as usize, value);
-        } else if address < 0x3F00 {
+        } else if address < PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
-            let name_table_address = (address - 0x2000) % 0x1000;
-            self.name_tables.write_byte(name_table_address as usize, value);
+            let name_table_byte = (address - 0x2000) % 0x1000;
+            self.name_tables.write_byte(name_table_byte as usize, value);
         } else {
             // Pallete Memory
-            let pallete_memory_address = (address - 0x3F00) % 0x20;
+            let pallete_memory_address = (address - PALETTE_RAM) % 0x20;
             self.palletes.write_byte(pallete_memory_address as usize, value);
         }
     }
@@ -54,13 +148,13 @@ impl PpuMemory {
         if address < 0x2000 {
             // Pattern Tables
             self.pattern_tables.read_byte(address as usize)
-        } else if address < 0x3F00 {
+        } else if address < PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
-            let name_table_address = (address - 0x2000) % 0x1000;
-            self.name_tables.read_byte(name_table_address as usize)
+            let name_table_byte = (address - 0x2000) % 0x1000;
+            self.name_tables.read_byte(name_table_byte as usize)
         } else {
             // Pallete Memory
-            let pallete_memory_address = (address - 0x3F00) % 0x20;
+            let pallete_memory_address = (address - PALETTE_RAM) % 0x20;
             self.palletes.read_byte(pallete_memory_address as usize)
         }
     }
@@ -122,6 +216,31 @@ impl LatchedDataBuffer {
     }
 }
 
+struct ShiftRegister(u16);
+
+impl ShiftRegister {
+
+    fn initialize() -> Self {
+        Self(0x0000)
+    }
+
+    fn push(&mut self, byte: u8) {
+        self.0 = (self.0 << 8) | (byte as u16);
+    }
+
+    fn hi(&self) -> u8 {
+        (self.0 >> 8) as u8
+    }
+
+    fn lo(&self) -> u8 {
+        self.0 as u8
+    }
+
+    fn bit(&self, n: u8) -> u8 {
+        ((self.0 >> n) & 0x01) as u8
+    }
+}
+
 pub struct Ppu {
     memory: PpuMemory,
     control: PpuControl,
@@ -135,15 +254,18 @@ pub struct Ppu {
     loopy_w: WriteToggle,
     frame_operations: Vec<[Vec<CycleOperation>; NUM_DOTS]>,
     frame_index: (usize, usize), // row, column,
-    rendering_enabled: bool,
     vblank: bool,
     nmi: bool,
     sprite_overflow: bool,
     sprite_zero_hit: bool,
-    name_table_address: u16,
-    attribute_table_address: u16,
+    name_table_byte: u8,
+    attribute_table_group: u8,
     pattern_table_byte_lo: u8,
     pattern_table_byte_hi: u8,
+    pattern_byte_sr_hi: ShiftRegister,
+    pattern_byte_sr_lo: ShiftRegister,
+    attribute_byte_sr: ShiftRegister,
+    pixel_lines: Vec<String>,
 }
 
 enum WriteToggle {
@@ -220,16 +342,23 @@ impl Ppu {
             loopy_w: WriteToggle::First,
             frame_operations: frame_operations,
             frame_index: (PRERENDER_SCANLINE, 0), // Starts on the pre-render line
-            rendering_enabled: false,
             vblank: false,
             nmi: false,
             sprite_overflow: false,
             sprite_zero_hit: false,
-            name_table_address: 0x2000,
-            attribute_table_address: 0x23C0,
+            name_table_byte: 0x0000,
+            attribute_table_group: 0x00,
             pattern_table_byte_lo: 0x00,
             pattern_table_byte_hi: 0x00,
+            pattern_byte_sr_hi: ShiftRegister::initialize(),
+            pattern_byte_sr_lo: ShiftRegister::initialize(),
+            attribute_byte_sr: ShiftRegister::initialize(),
+            pixel_lines: vec![],
         }
+    }
+
+    pub fn write_chr_rom_data(&mut self, data: &[u8]) {
+        self.memory.write_bytes(0x00, data);
     }
 
     pub fn vblank(&self) -> bool {
@@ -238,6 +367,10 @@ impl Ppu {
 
     pub fn nmi(&self) -> bool {
         self.nmi
+    }
+
+    fn rendering_enabled(&self) -> bool {
+        self.mask.bg_enabled() || self.mask.sprites_enabled()
     }
 
     pub fn write_io_register(&mut self, address: u16, data: u8) {
@@ -284,7 +417,7 @@ impl Ppu {
                     // t: FGH..AB CDE..... <- d: ABCDEFGH
                     // w:                  <- 0
                     WriteToggle::Second => {
-                        self.loopy_t = (self.loopy_t & 0x0C1F) | ((fine_x as u16) << 12) | ((upper_five as u16) << 2);
+                        self.loopy_t = (self.loopy_t & 0x0C1F) | ((fine_x as u16) << 12) | ((upper_five as u16) << 5);
                         self.loopy_w = WriteToggle::First;
                     },
                 }
@@ -322,10 +455,11 @@ impl Ppu {
                 // Write the byte to our latch too
                 self.ppu_data.write(data);
                 // Increment VRAM address
-                match self.control.vram_address_increment() {
-                    VramIncrement::CoarseX => self.increment_coarse_x(),
-                    VramIncrement::Y => self.increment_y(),
-                }
+                let inc = match self.control.vram_address_increment() {
+                    VramIncrement::CoarseX => 1,
+                    VramIncrement::Y => 32,
+                };
+                self.loopy_v = self.loopy_v.wrapping_add(inc);
             },
             _ => panic!("Unimplemented address written to: 0x{:4X}, 0x{:2X}", address, data),
         }
@@ -353,6 +487,8 @@ impl Ppu {
                 let z_bit = if self.sprite_zero_hit { 0x20 } else { 0x00 };
                 // Clear the VBlank flag.
                 self.vblank = false;
+                // Reset the write latch
+                self.loopy_w = WriteToggle::First;
                 v_bit | s_bit | z_bit
             },
             // OAM Address 
@@ -369,7 +505,7 @@ impl Ppu {
             0x2006 => {
                 // We shouldn't be reading from this, but return 0x00 if we do
                 // TODO: Should we return something else?
-                0x00
+                self.loopy_v as u8
             },
             // PPU Data
             0x2007 => {
@@ -411,7 +547,7 @@ impl Ppu {
         if self.loopy_v & 0x7000 != 0x7000 {
             self.loopy_v += 0x1000; // Increment fine y
         } else {
-            self.loopy_v &= 0x1FFF; // Zero out the fine y.
+            self.loopy_v &= 0x0FFF; // Zero out the fine y.
             let mut coarse_y = (self.loopy_v & 0x03E0) >> 5;
             if coarse_y == 29 {
                 coarse_y = 0;
@@ -425,6 +561,15 @@ impl Ppu {
             // Now stuff 'er back in there lad
             self.loopy_v = (self.loopy_v & 0xFC1F) | (coarse_y << 5)
         }
+    }
+
+    // Returns a number from 0 -> 7 indicating the fine y. Used for picking out the correct 8x1 pixel sliver from our tiles.
+    fn fine_y(&self) -> u8 {
+        ((self.loopy_v & 0x7000) >> 12) as u8
+    }
+
+    fn get_system_color(&self, color_index: u8) -> Pixel {
+        SYSTEM_PALETTE_COLORS[color_index as usize]
     }
 
     pub fn execute_cycle(&mut self) {
@@ -445,29 +590,87 @@ impl Ppu {
         self.frame_index = (next_scanline, next_dot);
     }
 
+    // The following diagram is helpful to understand how the name table values index into the pattern table.
+    // For example, the name table value 0x24 corresponds to 0010 0100 for the "N bits" below.
+    //
+    // DCBA98 76543210
+    // ---------------
+    // 0HNNNN NNNNPyyy
+    // |||||| |||||+++- T: Fine Y offset, the row number within a tile
+    // |||||| ||||+---- P: Bit plane (0: less significant bit; 1: more significant bit)
+    // ||++++-++++----- N: Tile number from name table
+    // |+-------------- H: Half of pattern table (0: "left"; 1: "right")
+    // +--------------- 0: Pattern table is at $0000-$1FFF
     fn execute_operation(&mut self, operation: CycleOperation) {
+        // TODO: Is this right?
+         // Vblank flag maintenance happens regardless of rendering state. Otherwise skip if we're not rendering.
+        match operation {
+            CycleOperation::SetVblank | CycleOperation::ClearVblank => {},
+            _ => {
+                // Skip if we're not rendering.
+                if !self.rendering_enabled() {
+                    return;
+                }
+            },
+        }
+
         match operation {
             CycleOperation::NameTableAccess | CycleOperation::UnusedNameTableAccess => {
-                self.name_table_address = 0x2000 | self.loopy_v & 0x0FFF;
+                let name_table_addr = 0x2000 | (self.loopy_v & 0x0FFF);
+                self.name_table_byte = self.memory.read_byte(name_table_addr);
             },
             CycleOperation::AttributeTableAccess => {
-                self.attribute_table_address = 0x23C0 | (self.loopy_v & 0x0C00) | ((self.loopy_v >> 4) & 0x0038) | ((self.loopy_v >> 2) & 0x0007);
+                let attribute_table_address = 0x23C0 | (self.loopy_v & 0x0C00) | ((self.loopy_v >> 4) & 0x0038) | ((self.loopy_v >> 2) & 0x0007);
+                let attribute_byte = self.memory.read_byte(attribute_table_address);
+                // We must also include the attribute table group Quadrant = YX
+                let coarse_x = self.loopy_v & 0x001F;
+                let coarse_y = (self.loopy_v >> 5) & 0x001F;
+                let quadrant = (((coarse_y >> 1) & 0x01) << 1) | ((coarse_x >> 1) & 0x01);
+                self.attribute_table_group = ((attribute_byte >> (quadrant * 2)) & 0x03) as u8;
             },
             CycleOperation::BackgroundLsb => {
-                // Use the name table address to fetch the correct byte from the pattern table.
-                let pattern_table_index = self.memory.read_byte(self.name_table_address);
-                self.pattern_table_byte_lo = self.memory.read_byte(self.control.base_name_table_address() + (2 * pattern_table_index as u16));
+                // According to diagram above with P = 0.
+                let pattern_table_address = ((self.control.bg_pattern_table_half() as u16) << 12) | ((self.name_table_byte as u16) << 4) | (self.fine_y() as u16);
+                self.pattern_table_byte_lo = self.memory.read_byte(pattern_table_address);
             },
             CycleOperation::BackgroundMsb => {
-                // Use the name table address to fetch the correct byte from the pattern table.
-                let pattern_table_index = self.memory.read_byte(self.name_table_address);
-                self.pattern_table_byte_hi = self.memory.read_byte(self.control.base_name_table_address() + (2 * pattern_table_index as u16) + 1);
+                // According to diagram above with P = 1.
+                let pattern_table_address = ((self.control.bg_pattern_table_half() as u16) << 12) | ((self.name_table_byte as u16) << 4) | 0x08 | (self.fine_y() as u16);
+                self.pattern_table_byte_hi = self.memory.read_byte(pattern_table_address);
             },
             CycleOperation::IncrementHorizontalV => {
-                self.increment_coarse_x();
                 // Incrementing the horizontal VRAM address means building a pixel line and rendering!
-                // if self.rendering_enabled() && self.frame_index.1
-                // self.render_pixels()
+
+                // Get a pixel line from the high and low bytes
+                let mut pixel_line = String::new();
+                for i in 0..8 {
+                    let shift = 15 - self.fine_x - i;
+                    let hi = self.pattern_byte_sr_hi.bit(shift);
+                    let lo = self.pattern_byte_sr_lo.bit(shift);
+                    // Current tile's palette, use next byte (lo) if fine_x bleeds over
+                    let palette = if self.fine_x + i <= 7 {
+                        self.attribute_byte_sr.hi()   // current tile
+                    } else {
+                        self.attribute_byte_sr.lo()     // neighbor tile
+                    } & 0x03;
+                    let value = (((hi << 1) | lo) & 0x03) as u16;
+
+                    // Get the right color value from Palette RAM
+                    // Color index is a 6-bit index into system colors.
+                    let color_index = (self.memory.read_byte(PALETTE_RAM | ((palette as u16) << 2) | (value as u16))) & 0x3F;
+                    let color = self.get_system_color(color_index).to_string();
+                    pixel_line += &color;
+                }
+
+                if self.frame_index.0 < 240 && self.frame_index.1 < 257 {
+                    self.pixel_lines.push(pixel_line);
+                }
+
+                // Shift the pixels
+                self.pattern_byte_sr_hi.push(self.pattern_table_byte_hi);
+                self.pattern_byte_sr_lo.push(self.pattern_table_byte_lo);
+                self.attribute_byte_sr.push(self.attribute_table_group);
+                self.increment_coarse_x();
             },
             CycleOperation::IncrementVerticalV => {
                 self.increment_y();
@@ -477,16 +680,29 @@ impl Ppu {
             },
             CycleOperation::SetVblank => {
                 self.vblank = true;
+                if self.pixel_lines.len() > 0 {
+                    let mut i = 0;
+                    for pixel_line in self.pixel_lines.iter() {
+                        i += 1;
+                        print!("{}", pixel_line);
+                        if i % 32 == 0 {
+                            println!("");
+                        }
+                    }
+
+                    println!("");
+                    self.pixel_lines.clear();
+                }
             },
             CycleOperation::EqualizeHorizontalVT => {
-                if self.rendering_enabled {
+                if self.rendering_enabled() {
                     // Copy over the horizontal bits
                     // v: ....A.. ...BCDEF <- t: ....A.. ...BCDEF
                     self.loopy_v = (self.loopy_v & 0xFBE0) | (self.loopy_t & 0x041F)
                 }
             },
             CycleOperation::EqualizeVerticalVT => {
-                if self.rendering_enabled {
+                if self.rendering_enabled() {
                     // Copy over the vertical bits.
                     // v: GHIA.BC DEF..... <- t: GHIA.BC DEF.....
                     self.loopy_v = (self.loopy_v & 0x041F) | (self.loopy_t & 0xFBE0)

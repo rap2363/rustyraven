@@ -6,7 +6,7 @@ mod ppu_registers;
 mod processor_status;
 mod rom;
 
-// use std::collections::HashSet;
+use std::collections::HashSet;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let nes_rom = rom::NesRom::from_file_path("src/resources/donkey_kong.nes")?;
@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cpu.memory.write_bytes(0x8000, &nes_rom.prg_rom_data);
     // NROM means we write it to the lower and upper banks.
     cpu.memory.write_bytes(0xC000, &nes_rom.prg_rom_data);
+    cpu.ppu().borrow_mut().write_chr_rom_data(&nes_rom.chr_rom_data);
 
     println!("NMI Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFA));
     println!("RES Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFC));
@@ -27,6 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut i = 0;
     // let mut vblank_latch = true;
+    // let mut prev_nmi_line = false;
     // let mut seen_data = HashSet::new();
 
     loop {
@@ -39,9 +41,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ppu.borrow_mut().execute_cycle();
 
         // Check for an NMI and set the interrupt.
+        // This is still a *little* hacky because the read from 2002 clears the Vblank flag on that register.
         if cpu.ppu().borrow().nmi() && cpu.ppu().borrow_mut().read_io_register(0x2002) & 0x80 == 0x80 {
             cpu.set_nmi();
         }
+
+        // Checks NMI and vblank inside the PPU.
+        // let nmi_line = ppu.borrow().nmi();
+        // if nmi_line && !prev_nmi_line {
+        //     cpu.set_nmi();
+        // }
+        // prev_nmi_line = nmi_line;
 
         // Check for a vblank and set the interrupt.
         // if cpu.ppu().borrow().vblank() && vblank_latch {

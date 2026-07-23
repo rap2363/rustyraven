@@ -16,6 +16,7 @@ enum SpriteSize {
     EightBySixteen,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum VramIncrement {
     CoarseX,
     Y,
@@ -38,8 +39,8 @@ impl PpuControl {
         if (self.0 >> 5 & 0x01) == 0x00 { SpriteSize::EightByEight } else { SpriteSize::EightBySixteen }
     }
 
-    pub fn bg_pattern_table_address(self) -> u16 {
-        ((self.0 >> 4 & 0x01) << 3) as u16
+    pub fn bg_pattern_table_half(self) -> u8 {
+        self.0 >> 4 & 0x01
     }
 
     pub fn sprite_pattern_table_address(self) -> u16 {
@@ -138,7 +139,7 @@ mod tests {
         let ppu_control = PpuControl(0x82);
         assert_eq!(ppu_control.base_name_table_address(), 0x2800);
         assert_eq!(ppu_control.sprite_size(), SpriteSize::EightByEight);
-        assert_eq!(ppu_control.vram_address_increment(), 1);
+        assert_eq!(ppu_control.vram_address_increment(), VramIncrement::CoarseX);
         assert!(ppu_control.is_nmi());
     }
 }
