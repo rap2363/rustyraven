@@ -509,7 +509,7 @@ impl Cpu {
             0x9A => (TXS, self.implied(), Cycles::Fixed(2)),
             0x98 => (TYA, self.implied(), Cycles::Fixed(2)),
 
-            x => todo!("Unimplemented opcode: {:?}!", x),
+            x => todo!("Unimplemented opcode: 0x{:2X}!", x),
         };
         FetchInstructionResult::new(opcode, addressing_mode, cycles)
     }

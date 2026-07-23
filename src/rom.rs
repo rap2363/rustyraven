@@ -66,7 +66,7 @@ impl NesRom {
         let mapper_value = (flags_seven & 0xF0) + (flags_six >> 4);
         let mapper = match mapper_value {
             0x00 => Mapper::Nrom,
-            x => Mapper::Unknown(x),
+            x => panic!("Unknown mapper {x}!"),
         };
         let trainer_num_bytes = if trainer_data_present { 512 } else { 0 };
         let prg_rom_offset = 16 + trainer_num_bytes;

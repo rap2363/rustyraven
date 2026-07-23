@@ -593,7 +593,7 @@ impl Ppu {
     }
 
     pub fn get_image(&self) -> Option<Vec<Pixel>> {
-        self.image_buffer.front()
+        self.image_buffer.front().filter(|pixels| pixels.len() == 256 * 240)
     }
 
     pub fn execute_cycle(&mut self) {

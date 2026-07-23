@@ -70,7 +70,10 @@ fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
     // Load the prg_rom data into main memory starting at 0x8000-0xFFFF
     cpu.memory.write_bytes(0x8000, &nes_rom.prg_rom_data);
     // NROM means we write it to the lower and upper banks.
-    cpu.memory.write_bytes(0xC000, &nes_rom.prg_rom_data);
+    if nes_rom.prg_rom_data.len() == 0x4000 {
+        // Copy it to the upper bank as well.
+        cpu.memory.write_bytes(0xC000, &nes_rom.prg_rom_data);
+    }
     cpu.ppu().borrow_mut().write_chr_rom_data(&nes_rom.chr_rom_data);
 
     println!("NMI Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFA));
@@ -109,12 +112,9 @@ fn main_nes_loop(cpu: &mut cpu::Cpu) -> Option<ColorImage> {
     }
 
     if let Some(pixels) = cpu.ppu().borrow().get_image() {
-        // Ignore if pixel length not corrrect
-        if pixels.len() != 256 * 240 {
-            return None;
-        }
-
-        std::thread::sleep(std::time::Duration::from_millis(14)); // ~60 fps
+        // TODO: We should do this on a fixed interval runtime but threading in tokio is going
+        // to be a hassle..
+        std::thread::sleep(std::time::Duration::from_millis(11));
 
         let mut color_image_pixels = Vec::with_capacity(256 * 240);
         // Otherwise we'll convert our RGB pixels.
