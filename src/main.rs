@@ -6,10 +6,65 @@ mod ppu_registers;
 mod processor_status;
 mod rom;
 
-use std::collections::HashSet;
+// Rendering code, consider moving
+// TODO: Move this code once you confirm it's WAI
+const L: usize = 256;
+const H: usize = 240;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let nes_rom = rom::NesRom::from_file_path("src/resources/donkey_kong.nes")?;
+use eframe::egui;
+use egui::{ColorImage};
+use std::sync::mpsc;
+
+struct Emulation {
+    texture: Option<egui::TextureHandle>,
+    rx: mpsc::Receiver<egui::ColorImage>, // Channel to receive images we'll display
+}
+
+impl eframe::App for Emulation {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+         // Drain the channel; keep only the newest image if several queued up.
+        if let Some(image) = self.rx.try_iter().last() {
+            match &mut self.texture {
+                // Texture exists: update its pixels in place on the GPU.
+                Some(texture) => texture.set(image, egui::TextureOptions::NEAREST),
+                // First image ever: create the texture.
+                None => {
+                    self.texture = Some(ui.ctx().load_texture(
+                        "emulation_image",
+                        image,
+                        egui::TextureOptions::NEAREST,
+                    ))
+                }
+            }
+        }
+
+         // Scale the image to fill the window, recomputed every frame.
+        match &self.texture {
+            Some(texture) => {
+                ui.centered_and_justified(|ui| {
+                    ui.add(
+                        egui::Image::new(texture)
+                            .fit_to_exact_size(ui.available_size()),
+                    );
+                });
+            }
+            None => {
+                ui.label("waiting for first frame...");
+            }
+        }
+        // egui::Frame::central_panel(ui.style()).show(ui, |ui| {
+        //     match &self.texture {
+        //         Some(texture) => { ui.image(texture); }
+        //         None => { ui.label("waiting for first frame..."); }
+        //     }
+        // });
+    }
+}
+
+// TODO (replace this with whatever)
+fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
+    // Initializing Code for CPU
+    let nes_rom = rom::NesRom::from_file_path("src/resources/donkey_kong.nes").expect("File not found!");
 
     let mut cpu = cpu::Cpu::initialize();
     // Load the prg_rom data into main memory starting at 0x8000-0xFFFF
@@ -26,69 +81,108 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cpu.pc = cpu.memory.read_two_bytes(0xFFFC);
     cpu.cycle_count = 7;
 
-    let mut i = 0;
-    // let mut vblank_latch = true;
-    // let mut prev_nmi_line = false;
-    // let mut seen_data = HashSet::new();
-
     loop {
-        // Execute one cycle for the CPU
-        let _b = cpu.execute_cycles_for_one_instruction();
-        // Execute 3 cycles for the ppu.
-        let ppu = cpu.ppu();
-        ppu.borrow_mut().execute_cycle();
-        ppu.borrow_mut().execute_cycle();
-        ppu.borrow_mut().execute_cycle();
-
-        // Check for an NMI and set the interrupt.
-        // This is still a *little* hacky because the read from 2002 clears the Vblank flag on that register.
-        if cpu.ppu().borrow().nmi() && cpu.ppu().borrow_mut().read_io_register(0x2002) & 0x80 == 0x80 {
-            cpu.set_nmi();
+        if let Some(image) = main_nes_loop(&mut cpu) && tx.send(image).is_err() {
+            return; // window closed, receiver dropped
         }
 
-        // Checks NMI and vblank inside the PPU.
-        // let nmi_line = ppu.borrow().nmi();
-        // if nmi_line && !prev_nmi_line {
-        //     cpu.set_nmi();
+        // if tx.send(egui::ColorImage { size: [L, H], source_size: Vec2::new(L as f32, H as f32), pixels }).is_err() {
+        //     return; // window closed, receiver dropped
         // }
-        // prev_nmi_line = nmi_line;
+        ctx.request_repaint(); // wake the UI so it actually draws the new frame
+     }
+}
 
-        // Check for a vblank and set the interrupt.
-        // if cpu.ppu().borrow().vblank() && vblank_latch {
-        //     cpu.set_nmi();
-        //     vblank_latch = false;
-        // }
+fn main_nes_loop(cpu: &mut cpu::Cpu) -> Option<ColorImage> {
+    // Execute one cycle for the CPU
+    cpu.execute_cycles_for_one_instruction();
+    // Execute 3 cycles for the ppu.
+    let ppu = cpu.ppu();
+    ppu.borrow_mut().execute_cycle();
+    ppu.borrow_mut().execute_cycle();
+    ppu.borrow_mut().execute_cycle();
 
-        // if !cpu.ppu().borrow().vblank() && !vblank_latch {
-        //     vblank_latch = true;
-        // }
-
-        // let data = cpu.memory.read_byte(0x2007);
-        // if !seen_data.contains(&data) {
-        //     println!("0x{:04X}=0x{:02X}", 0x2007, data);
-        //     seen_data.insert(data);
-        // }
-
-        // println!("{:?}", cpu.to_string());
-
-        // if !ppu.borrow().status().is_vblank() && vblank_latch {
-        //     // Turn the latch back off when we clear the vblank.
-        //     vblank_latch = false;
-        // }
-
-        i += 1;
-        // for addr in 0x2000..=0x2007 {
-        //     println!("0x{:04X}=0x{:02X}", addr, cpu.memory.read_byte(addr));
-        // }
-        // let addr = 0x4014;
-        // println!("0x{:04X}=0x{:02X}", addr, cpu.memory.read_byte(addr));
-        // if cpu.memory.read_byte(0x2006) != 0x00 {
-        //     println!("0x{:04X}=0x{:02X}", 0x2006, cpu.memory.read_byte(0x2006));
-        // }
-        // if cpu.memory.read_byte(0x2007) != 0x00 && cpu.memory.read_byte(0x2007) != 0x24 {
-        //     println!("0x{:04X}=0x{:02X}", 0x2007, cpu.memory.read_byte(0x2007));
-        // }
+    // Check for an NMI and set the interrupt.
+    // This is still a *little* hacky because the read from 2002 clears the Vblank flag on that register.
+    if cpu.ppu().borrow().nmi() && cpu.ppu().borrow_mut().read_io_register(0x2002) & 0x80 == 0x80 {
+        cpu.set_nmi();
     }
 
-    Ok(())
+    if let Some(pixels) = cpu.ppu().borrow().get_image() {
+        // Ignore if pixel length not corrrect
+        if pixels.len() != 256 * 240 {
+            return None;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(16)); // ~60 fps
+
+        let mut color_image_pixels = Vec::with_capacity(256 * 240);
+        // Otherwise we'll convert our RGB pixels.
+        for ppu::Pixel(r, g, b) in pixels.into_iter() {
+            color_image_pixels.push(egui::Color32::from_rgb(r, g, b));
+        }
+        return Some(egui::ColorImage {
+            size: [L, H],
+            source_size: egui::Vec2::new(L as f32, H as f32),
+            pixels: color_image_pixels,
+        });
+    }
+    None
+}
+
+fn main() -> eframe::Result<()> {
+    // // Initializing Code for CPU
+    // let nes_rom = rom::NesRom::from_file_path("src/resources/donkey_kong.nes").expect("File not found!");
+
+    // let mut cpu = cpu::Cpu::initialize();
+    // // Load the prg_rom data into main memory starting at 0x8000-0xFFFF
+    // cpu.memory.write_bytes(0x8000, &nes_rom.prg_rom_data);
+    // // NROM means we write it to the lower and upper banks.
+    // cpu.memory.write_bytes(0xC000, &nes_rom.prg_rom_data);
+    // cpu.ppu().borrow_mut().write_chr_rom_data(&nes_rom.chr_rom_data);
+
+    // println!("NMI Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFA));
+    // println!("RES Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFC));
+    // println!("IRQ Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFE));
+
+    // // Read from a RESET interrupt
+    // cpu.pc = cpu.memory.read_two_bytes(0xFFFC);
+    // cpu.cycle_count = 7;
+
+    let (tx, rx) = mpsc::channel();
+
+    // Make the window exactly the size of the image.
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([L as f32, H as f32])
+            .with_resizable(true),
+        ..Default::default()
+    };
+ 
+    eframe::run_native(
+        "Rusty Raven",
+        options,
+        Box::new(move |cc| {
+            // Clone the Context here so the producer can request repaints.
+            let ctx = cc.egui_ctx.clone();
+            std::thread::spawn(move || produce_images(tx, ctx));
+            Ok(Box::new(Emulation { rx, texture: None }))
+        }),
+    )
+
+    // loop {
+    //     // Execute one cycle for the CPU
+    //     cpu.execute_cycles_for_one_instruction();
+    //     // Execute 3 cycles for the ppu.
+    //     let ppu = cpu.ppu();
+    //     ppu.borrow_mut().execute_cycle();
+    //     ppu.borrow_mut().execute_cycle();
+    //     ppu.borrow_mut().execute_cycle();
+
+    //     // Check for an NMI and set the interrupt.
+    //     // This is still a *little* hacky because the read from 2002 clears the Vblank flag on that register.
+    //     if cpu.ppu().borrow().nmi() && cpu.ppu().borrow_mut().read_io_register(0x2002) & 0x80 == 0x80 {
+    //         cpu.set_nmi();
+    //     }
+    // }
 }

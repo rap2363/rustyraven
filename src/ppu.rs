@@ -1,5 +1,6 @@
 use crate::memory::Segment;
 use crate::ppu_registers::{PpuControl, PpuMask, PpuStatus, VramIncrement};
+use std::cell::Cell;
 
 const PRERENDER_SCANLINE: usize = 261;
 const NUM_SCANLINES: usize = 262;
@@ -19,25 +20,7 @@ struct PpuMemory {
 
 // Red-Green-Blue
 #[derive(Clone, Copy)]
-struct Pixel(u8, u8, u8);
-
-impl Pixel {
-    fn to_string(&self) -> String {
-        if self.0 == self.1 && self.1 == self.2 {
-            // Return black
-            "⚫".to_string()
-        } else if self.0 > self.1 {
-            // Return Red
-            "🔴".to_string()
-        } else if self.1 > self.2 {
-            // Return blue
-            "🔵".to_string()
-        } else {
-            // Return green
-            "🟢".to_string()
-        }
-    }
-}
+pub struct Pixel(pub u8, pub u8, pub u8);
 
 // I stole this from myself (WhiteRaven)
 const SYSTEM_PALETTE_COLORS: [Pixel; 64] = [
@@ -216,6 +199,43 @@ impl LatchedDataBuffer {
     }
 }
 
+// Used for storing/writing the current image, this structure is used to return 
+// an owned copy of a fully "written" image while we continue to write to the other.
+struct DoubleBuffer {
+    front: Vec<Pixel>,
+    back: Vec<Pixel>,
+    ready: Cell<bool>,
+}
+
+impl DoubleBuffer {
+    fn initialize() -> Self {
+        Self {
+            front: Vec::with_capacity(256 * 240),
+            back: Vec::with_capacity(256 * 240),
+            ready: Cell::new(false),
+        }
+    }
+
+    fn front(&self) -> Option<Vec<Pixel>> {
+        if self.ready.get() { 
+            self.ready.set(false);
+            Some(self.front.clone()) 
+        } else { 
+            None 
+        }
+    }
+
+    fn back(&mut self) -> &mut Vec<Pixel> {
+        &mut self.back
+    }
+
+    fn swap(&mut self) {
+        self.front = self.back.clone();
+        self.back.clear();
+        self.ready.set(true);
+    }
+}
+
 struct ShiftRegister(u16);
 
 impl ShiftRegister {
@@ -265,7 +285,7 @@ pub struct Ppu {
     pattern_byte_sr_hi: ShiftRegister,
     pattern_byte_sr_lo: ShiftRegister,
     attribute_byte_sr: ShiftRegister,
-    pixel_lines: Vec<String>,
+    image_buffer: DoubleBuffer,
 }
 
 enum WriteToggle {
@@ -353,7 +373,7 @@ impl Ppu {
             pattern_byte_sr_hi: ShiftRegister::initialize(),
             pattern_byte_sr_lo: ShiftRegister::initialize(),
             attribute_byte_sr: ShiftRegister::initialize(),
-            pixel_lines: vec![],
+            image_buffer: DoubleBuffer::initialize(),
         }
     }
 
@@ -572,6 +592,10 @@ impl Ppu {
         SYSTEM_PALETTE_COLORS[color_index as usize]
     }
 
+    pub fn get_image(&self) -> Option<Vec<Pixel>> {
+        self.image_buffer.front()
+    }
+
     pub fn execute_cycle(&mut self) {
         let (scanline, dot) = self.frame_index;
         // TODO: Cloning this is kind of ridiculous, but there's not a simple way to call into execute_operation otherwise.
@@ -642,7 +666,7 @@ impl Ppu {
                 // Incrementing the horizontal VRAM address means building a pixel line and rendering!
 
                 // Get a pixel line from the high and low bytes
-                let mut pixel_line = String::new();
+                let mut pixel_line = Vec::with_capacity(8);
                 for i in 0..8 {
                     let shift = 15 - self.fine_x - i;
                     let hi = self.pattern_byte_sr_hi.bit(shift);
@@ -658,12 +682,11 @@ impl Ppu {
                     // Get the right color value from Palette RAM
                     // Color index is a 6-bit index into system colors.
                     let color_index = (self.memory.read_byte(PALETTE_RAM | ((palette as u16) << 2) | (value as u16))) & 0x3F;
-                    let color = self.get_system_color(color_index).to_string();
-                    pixel_line += &color;
+                    pixel_line.push(self.get_system_color(color_index));
                 }
 
                 if self.frame_index.0 < 240 && self.frame_index.1 < 257 {
-                    self.pixel_lines.push(pixel_line);
+                    self.image_buffer.back().extend(pixel_line);
                 }
 
                 // Shift the pixels
@@ -680,19 +703,7 @@ impl Ppu {
             },
             CycleOperation::SetVblank => {
                 self.vblank = true;
-                if self.pixel_lines.len() > 0 {
-                    let mut i = 0;
-                    for pixel_line in self.pixel_lines.iter() {
-                        i += 1;
-                        print!("{}", pixel_line);
-                        if i % 32 == 0 {
-                            println!("");
-                        }
-                    }
-
-                    println!("");
-                    self.pixel_lines.clear();
-                }
+                self.image_buffer.swap();
             },
             CycleOperation::EqualizeHorizontalVT => {
                 if self.rendering_enabled() {
