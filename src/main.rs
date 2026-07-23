@@ -114,7 +114,7 @@ fn main_nes_loop(cpu: &mut cpu::Cpu) -> Option<ColorImage> {
             return None;
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(16)); // ~60 fps
+        std::thread::sleep(std::time::Duration::from_millis(14)); // ~60 fps
 
         let mut color_image_pixels = Vec::with_capacity(256 * 240);
         // Otherwise we'll convert our RGB pixels.
