@@ -16,6 +16,8 @@ struct PpuMemory {
     name_tables: Segment<0x1000>,
     // 0x3F00 --> 0x3F20 (with mirrors up to 0x4000)
     palletes: Segment<0x0040>,
+    // 256 bytes of separately addressable memory to store 64 sprites of 4 bytes each.
+    oam_data: Segment<0x00FF>
 }
 
 // Red-Green-Blue
@@ -99,6 +101,7 @@ impl PpuMemory {
             pattern_tables: Segment::<0x2000>::initialize(),
             name_tables: Segment::<0x1000>::initialize(),
             palletes: Segment::<0x0040>::initialize(),
+            oam_data: Segment::<0x00FF>::initialize(),
         }
     }
 
@@ -220,7 +223,7 @@ impl DoubleBuffer {
         if self.ready.get() { 
             self.ready.set(false);
             Some(self.front.clone()) 
-        } else { 
+        } else {
             None 
         }
     }
@@ -266,7 +269,7 @@ pub struct Ppu {
     control: PpuControl,
     mask: PpuMask,
     oam_address: u8,
-    oam_data: u8,
+    dma_complete: Cell<bool>,
     ppu_data: LatchedDataBuffer,
     loopy_v: u16,
     loopy_t: u16,
@@ -354,7 +357,7 @@ impl Ppu {
             control: PpuControl::from(0x00),
             mask: PpuMask::from(0x00),
             oam_address: 0x00,
-            oam_data: 0x00,
+            dma_complete: Cell::new(false),
             ppu_data: LatchedDataBuffer::initialize(),
             loopy_v: 0x0000,
             loopy_t: 0x0000,
@@ -415,10 +418,12 @@ impl Ppu {
             // OAM Address 
             0x2003 => {
                 self.oam_address = data;
+                // Increment OAM after the write.
+                self.oam_address = self.oam_address.wrapping_add(1);
             },
             // OAM Data
             0x2004 => {
-                self.oam_data = data;
+                self.memory.oam_data.write_byte(self.oam_address as usize, data);
             },
             // PPU Scroll
             0x2005 => {
@@ -514,7 +519,7 @@ impl Ppu {
             // OAM Address 
             0x2003 => self.oam_address,
             // OAM Data
-            0x2004 => self.oam_data,
+            0x2004 => self.memory.oam_data.read_byte(self.oam_address as usize),
             // PPU Scroll
             0x2005 => {
                 // We shouldn't be reading from this, but return 0x00 if we do.
@@ -533,6 +538,19 @@ impl Ppu {
             },
             _ => panic!("Unimplemented address read from: 0x{:4X}", address),
         }
+    }
+
+    pub fn dma(&mut self, dma_bytes: &[u8]) {
+        // Write all 256 bytes into oam_data.
+        self.memory.oam_data.write_bytes(0x00, dma_bytes);
+        // Flag that we just DMA'ed (so we can increment the CPU cycle count).
+        self.dma_complete.set(true);
+    }
+
+    pub fn dma_flag(&self) -> bool {
+        let ret = self.dma_complete.get();
+        self.dma_complete.set(false);
+        ret
     }
 
     // See https://www.nesdev.org/wiki/PPU_scrolling for details.
@@ -598,10 +616,9 @@ impl Ppu {
 
     pub fn execute_cycle(&mut self) {
         let (scanline, dot) = self.frame_index;
-        // TODO: Cloning this is kind of ridiculous, but there's not a simple way to call into execute_operation otherwise.
-        // Maybe we could RefCell the FrameOperations or something.
-        for operation in self.frame_operations[scanline][dot].clone() {
+        for i in 0..self.frame_operations[scanline][dot].len() {
             // Execute the operation
+            let operation = self.frame_operations[scanline][dot][i];
             self.execute_operation(operation);
         }
         // Iterate frame_index

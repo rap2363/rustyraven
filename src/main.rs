@@ -6,6 +6,8 @@ mod ppu_registers;
 mod processor_status;
 mod rom;
 
+const DMA_CPU_CYCLE_COUNT: i32 = 512;
+
 // Rendering code, consider moving
 // TODO: Move this code once you confirm it's WAI
 const L: usize = 256;
@@ -52,12 +54,6 @@ impl eframe::App for Emulation {
                 ui.label("waiting for first frame...");
             }
         }
-        // egui::Frame::central_panel(ui.style()).show(ui, |ui| {
-        //     match &self.texture {
-        //         Some(texture) => { ui.image(texture); }
-        //         None => { ui.label("waiting for first frame..."); }
-        //     }
-        // });
     }
 }
 
@@ -89,9 +85,6 @@ fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
             return; // window closed, receiver dropped
         }
 
-        // if tx.send(egui::ColorImage { size: [L, H], source_size: Vec2::new(L as f32, H as f32), pixels }).is_err() {
-        //     return; // window closed, receiver dropped
-        // }
         ctx.request_repaint(); // wake the UI so it actually draws the new frame
      }
 }
@@ -109,6 +102,11 @@ fn main_nes_loop(cpu: &mut cpu::Cpu) -> Option<ColorImage> {
     // This is still a *little* hacky because the read from 2002 clears the Vblank flag on that register.
     if cpu.ppu().borrow().nmi() && cpu.ppu().borrow_mut().read_io_register(0x2002) & 0x80 == 0x80 {
         cpu.set_nmi();
+    }
+
+    // Check for a DMA and stall the cpu if it did.
+    if cpu.ppu().borrow().dma_flag() {
+        cpu.cycle_budget -= DMA_CPU_CYCLE_COUNT;
     }
 
     if let Some(pixels) = cpu.ppu().borrow().get_image() {
@@ -131,24 +129,6 @@ fn main_nes_loop(cpu: &mut cpu::Cpu) -> Option<ColorImage> {
 }
 
 fn main() -> eframe::Result<()> {
-    // // Initializing Code for CPU
-    // let nes_rom = rom::NesRom::from_file_path("src/resources/donkey_kong.nes").expect("File not found!");
-
-    // let mut cpu = cpu::Cpu::initialize();
-    // // Load the prg_rom data into main memory starting at 0x8000-0xFFFF
-    // cpu.memory.write_bytes(0x8000, &nes_rom.prg_rom_data);
-    // // NROM means we write it to the lower and upper banks.
-    // cpu.memory.write_bytes(0xC000, &nes_rom.prg_rom_data);
-    // cpu.ppu().borrow_mut().write_chr_rom_data(&nes_rom.chr_rom_data);
-
-    // println!("NMI Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFA));
-    // println!("RES Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFC));
-    // println!("IRQ Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFE));
-
-    // // Read from a RESET interrupt
-    // cpu.pc = cpu.memory.read_two_bytes(0xFFFC);
-    // cpu.cycle_count = 7;
-
     let (tx, rx) = mpsc::channel();
 
     // Make the window exactly the size of the image.
@@ -169,20 +149,4 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(Emulation { rx, texture: None }))
         }),
     )
-
-    // loop {
-    //     // Execute one cycle for the CPU
-    //     cpu.execute_cycles_for_one_instruction();
-    //     // Execute 3 cycles for the ppu.
-    //     let ppu = cpu.ppu();
-    //     ppu.borrow_mut().execute_cycle();
-    //     ppu.borrow_mut().execute_cycle();
-    //     ppu.borrow_mut().execute_cycle();
-
-    //     // Check for an NMI and set the interrupt.
-    //     // This is still a *little* hacky because the read from 2002 clears the Vblank flag on that register.
-    //     if cpu.ppu().borrow().nmi() && cpu.ppu().borrow_mut().read_io_register(0x2002) & 0x80 == 0x80 {
-    //         cpu.set_nmi();
-    //     }
-    // }
 }

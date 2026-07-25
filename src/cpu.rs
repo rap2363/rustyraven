@@ -91,7 +91,7 @@ pub struct Cpu {
     pub x: u8,
     pub y: u8,
     pub cycle_count: usize,
-    pub cycle_budget: i8, // when cycle_budget >= 0, we're allowed to execute cycles.
+    pub cycle_budget: i32, // when cycle_budget >= 0, we're allowed to execute cycles.
     nmi: Nmi, // Starts at 7 and decrements down to 0 with our normal cycle count. When this
               // happens we trigger an interrupt!
 }
@@ -1197,7 +1197,7 @@ impl Cpu {
             return false;
         } 
 
-        let num_cycles = self.fetch_instruction_and_execute() as i8;
+        let num_cycles = self.fetch_instruction_and_execute() as i32;
         self.dec_nmi(num_cycles as u8);
         self.cycle_budget -= num_cycles;
         // Check if we have an interrupt (NMI) enabled.

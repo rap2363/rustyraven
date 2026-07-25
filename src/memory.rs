@@ -13,6 +13,12 @@ impl<const N: usize> Segment<N> {
         }
     }
 
+    pub fn write_bytes(&mut self, address: usize, values: &[u8]) {
+        for i in 0..values.len() {
+            self.write_byte(address + i, values[i]);
+        }
+    }
+
     pub fn write_byte(&mut self, address: usize, value: u8) {
         self.data[address] = value;
     }
@@ -64,8 +70,22 @@ impl CpuMemory {
         } else {
             // Upper Memory
             let upper_memory_address = address - 0x4000;
+            // DMA
+            if upper_memory_address == 0x0014 {
+                self.ppu.borrow_mut().dma(&self.get_dma_bytes(value))
+            }
             self.upper_memory.write_byte(upper_memory_address as usize, value);
         }
+    }
+
+    fn get_dma_bytes(&self, address_hi: u8) -> Vec<u8> {
+        // Returns 256 bytes at $address_hi00 (always page-aligned).
+        let source_page = (address_hi << 2) as u16;
+        let mut dma_bytes = Vec::with_capacity(0xFF);
+        for offset in 0..0x00FF {
+            dma_bytes.push(self.read_byte(source_page + offset));
+        }
+        dma_bytes
     }
 
     pub fn write_bytes(&mut self, address: u16, values: &[u8]) {
