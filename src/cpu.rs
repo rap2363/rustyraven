@@ -1,5 +1,6 @@
 use crate::addressing_modes::PageBoundaryResult;
 use crate::addressing_modes::{AddressingMode, AddressingModeData, PageBoundaryResult::PageBoundaryCrossed};
+use crate::controller::Controller;
 use crate::memory::CpuMemory;
 use crate::ppu::Ppu;
 use crate::processor_status::ProcessorStatus;
@@ -78,6 +79,7 @@ enum Nmi {
 
 struct Bus {
     ppu: Rc<RefCell<Ppu>>,
+    controller_1: Rc<RefCell<Controller>>,
     // Eventually other peripherals will go here too.
 }
 
@@ -123,7 +125,7 @@ impl Cpu {
         let ppu = Rc::new(RefCell::new(Ppu::initialize()));
         Self {
             memory: CpuMemory::initialize(ppu.clone()),
-            bus: Bus { ppu: ppu.clone() },
+            bus: Bus { ppu: ppu.clone(), controller_1: Controller::initialize(ButtonReader::Keyboard) },
             processor_status: ProcessorStatus::initialize(),
             pc: RESET_ADDRESS,
             sp: 0xFD,

@@ -80,9 +80,9 @@ impl CpuMemory {
 
     fn get_dma_bytes(&self, address_hi: u8) -> Vec<u8> {
         // Returns 256 bytes at $address_hi00 (always page-aligned).
-        let source_page = (address_hi << 2) as u16;
-        let mut dma_bytes = Vec::with_capacity(0xFF);
-        for offset in 0..0x00FF {
+        let source_page = (address_hi as u16) << 8;
+        let mut dma_bytes = Vec::with_capacity(0x100);
+        for offset in 0..0x0100 {
             dma_bytes.push(self.read_byte(source_page + offset));
         }
         dma_bytes

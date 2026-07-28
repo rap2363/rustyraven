@@ -1,11 +1,12 @@
 use crate::memory::Segment;
-use crate::ppu_registers::{PpuControl, PpuMask, PpuStatus, VramIncrement};
+use crate::ppu_registers::{PpuControl, PpuMask, VramIncrement};
 use std::cell::Cell;
 
 const PRERENDER_SCANLINE: usize = 261;
 const NUM_SCANLINES: usize = 262;
 const NUM_DOTS: usize = 341;
-const PALETTE_RAM: u16 = 0x3F00;
+const BG_PALETTE_RAM: u16 = 0x3F00;
+const SPRITE_PALETTE_RAM: u16 = 0x3F10;
 
 // Address space from 0x0000 --> 0xFFFF, but
 // with mirrors from 0x4000 onward.
@@ -15,14 +16,23 @@ struct PpuMemory {
     // 0x2000 --> 0x2FFF (with mirrors up to 0x3EFF)
     name_tables: Segment<0x1000>,
     // 0x3F00 --> 0x3F20 (with mirrors up to 0x4000)
-    palletes: Segment<0x0040>,
+    palettes: Segment<0x0040>,
     // 256 bytes of separately addressable memory to store 64 sprites of 4 bytes each.
-    oam_data: Segment<0x00FF>
+    oam_data: Segment<0x0100>
 }
 
 // Red-Green-Blue
 #[derive(Clone, Copy)]
 pub struct Pixel(pub u8, pub u8, pub u8);
+
+#[derive(Copy, Clone)]
+enum SpritePriority {
+    BehindBackground,
+    InFrontOfBackground,
+}
+
+#[derive(Clone, Copy)]
+struct SpritePixel(Pixel, SpritePriority);
 
 // I stole this from myself (WhiteRaven)
 const SYSTEM_PALETTE_COLORS: [Pixel; 64] = [
@@ -95,13 +105,17 @@ const SYSTEM_PALETTE_COLORS: [Pixel; 64] = [
     Pixel(0x00, 0x00, 0x00), // 0x3F
 ];
 
+fn get_system_color(color_index: u8) -> Pixel {
+    SYSTEM_PALETTE_COLORS[color_index as usize]
+}
+
 impl PpuMemory {
      pub fn initialize() -> Self {
         Self {
             pattern_tables: Segment::<0x2000>::initialize(),
             name_tables: Segment::<0x1000>::initialize(),
-            palletes: Segment::<0x0040>::initialize(),
-            oam_data: Segment::<0x00FF>::initialize(),
+            palettes: Segment::<0x0040>::initialize(),
+            oam_data: Segment::<0x0100>::initialize(),
         }
     }
 
@@ -111,14 +125,14 @@ impl PpuMemory {
         if address < 0x2000 {
             // Pattern Tables
             self.pattern_tables.write_byte(address as usize, value);
-        } else if address < PALETTE_RAM {
+        } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
             let name_table_byte = (address - 0x2000) % 0x1000;
             self.name_tables.write_byte(name_table_byte as usize, value);
         } else {
-            // Pallete Memory
-            let pallete_memory_address = (address - PALETTE_RAM) % 0x20;
-            self.palletes.write_byte(pallete_memory_address as usize, value);
+            // Palette Memory
+            let palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
+            self.palettes.write_byte(palette_memory_address as usize, value);
         }
     }
 
@@ -134,14 +148,14 @@ impl PpuMemory {
         if address < 0x2000 {
             // Pattern Tables
             self.pattern_tables.read_byte(address as usize)
-        } else if address < PALETTE_RAM {
+        } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
             let name_table_byte = (address - 0x2000) % 0x1000;
             self.name_tables.read_byte(name_table_byte as usize)
         } else {
-            // Pallete Memory
-            let pallete_memory_address = (address - PALETTE_RAM) % 0x20;
-            self.palletes.read_byte(pallete_memory_address as usize)
+            // Palette Memory
+            let palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
+            self.palettes.read_byte(palette_memory_address as usize)
         }
     }
 
@@ -154,6 +168,67 @@ impl PpuMemory {
             self.read_byte(address), 
             self.read_byte(address.wrapping_add(1)),
         ])
+    }
+
+    fn create_sprite_line_pixels(&self, sprite_pattern_table: u16, scanline_y: u8) -> Vec<Option<SpritePixel>> {
+        // Creates a Vec of 256 sprite pixels for the line.
+        let mut sprites_on_scanline = Vec::with_capacity(8);
+        for i in (0..0x100).step_by(4) {
+            let index = i as usize;
+            let oam_y = self.oam_data.read_byte(index) as u16; // Sometimes a sprite can be written to 0xFF.
+            let top_y = oam_y + 1; // Add 1 because sprite positions are always written with a decrement.
+            let x_pos = self.oam_data.read_byte(index + 3);
+
+            if (scanline_y as u16) >= top_y && (scanline_y as u16) < top_y + 8 && top_y <= 240 {
+                // From NES dev wiki: 
+                // X-scroll values of $F9-FF results in parts of the sprite to be past the right edge of the screen, thus invisible. 
+                if x_pos < 0xF9 {
+                    sprites_on_scanline.push(
+                        Sprite::from(&[
+                            self.oam_data.read_byte(index),
+                            self.oam_data.read_byte(index + 1),
+                            self.oam_data.read_byte(index + 2),
+                            self.oam_data.read_byte(index + 3),
+                        ]
+                    ));
+                }
+            }
+        }
+
+        // 256 pixel initialization.
+        let mut sprite_pixels = vec![None; 0x100];
+
+        // Iterate through each sprite and update the sprite pixels accordingly. Iterate in reverse so that
+        // sprites earlier in the vec take priority and overwrite later ones.
+        for sprite in sprites_on_scanline.into_iter().rev() {
+            let row = scanline_y - (sprite.top_y + 1);
+            let y = if sprite.v_flip { 7 - row } else { row } as u16;
+            let hi_pattern_table_address = (sprite_pattern_table << 12) | ((sprite.tile_index as u16) << 4) | 0x08 | y;
+            let lo_pattern_table_address = (sprite_pattern_table << 12) | ((sprite.tile_index as u16) << 4) | y;
+            let pattern_table_byte_hi = self.read_byte(hi_pattern_table_address);
+            let pattern_table_byte_lo = self.read_byte(lo_pattern_table_address);
+
+            // Don't go over the right edge.
+            let start = sprite.left_x as u16;
+            for i in start..=(start + 7).min(0xFF) {
+                let offset = i - start;
+                let shift = if sprite.h_flip { offset } else { 7 - offset };
+                let hi = (pattern_table_byte_hi >> shift) & 0x01;
+                let lo = (pattern_table_byte_lo >> shift) & 0x01;
+                // Skip transparent pixels.
+                if hi == 0x00 && lo == 0x00 {
+                    continue;
+                }
+                let palette = sprite.palette_bits & 0x03;
+                let value = (((hi << 1) | lo) & 0x03) as u16;
+
+                // Color index is a 6-bit index into system colors.
+                let color_index = (self.read_byte(SPRITE_PALETTE_RAM | ((palette as u16) << 2) | (value as u16))) & 0x3F;
+                let pixel = get_system_color(color_index);
+                sprite_pixels[i as usize] = Some(SpritePixel(pixel, sprite.priority));
+            }
+        }
+        sprite_pixels
     }
 }
 
@@ -172,6 +247,7 @@ enum CycleOperation {
     EqualizeVerticalVT,
     SetVblank,
     ClearVblank,
+    SpriteEvaluation,
     SpriteZeroCheck,
     SpriteOverflowCheck,
     SpriteLsb,
@@ -264,6 +340,29 @@ impl ShiftRegister {
     }
 }
 
+struct Sprite {
+    left_x: u8,
+    top_y: u8,
+    tile_index: u8,
+    palette_bits: u8,
+    priority: SpritePriority,
+    h_flip: bool,
+    v_flip: bool,
+}
+
+impl Sprite {
+    fn from(bytes: &[u8; 4]) -> Self {
+        let [top_y, tile_index, attributes, left_x] = *bytes;
+
+        let palette_bits = attributes & 0x03;
+        let priority = if (attributes >> 5) & 0x01 == 0x01 { SpritePriority::BehindBackground } else { SpritePriority::InFrontOfBackground };
+        let h_flip = (attributes >> 6) & 0x01 == 0x01;
+        let v_flip = (attributes >> 7) & 0x01 == 0x01;
+
+        Self { left_x, top_y, tile_index, palette_bits, priority, h_flip, v_flip }
+    }
+}
+
 pub struct Ppu {
     memory: PpuMemory,
     control: PpuControl,
@@ -289,6 +388,7 @@ pub struct Ppu {
     pattern_byte_sr_lo: ShiftRegister,
     attribute_byte_sr: ShiftRegister,
     image_buffer: DoubleBuffer,
+    line_sprite_pixels: Vec<Option<SpritePixel>>,
 }
 
 enum WriteToggle {
@@ -303,6 +403,10 @@ impl Ppu {
         // Visible lines + Prerender line.
         for row_index in (0..=239).into_iter().chain(PRERENDER_SCANLINE..PRERENDER_SCANLINE + 1) {
             let scanline: &mut [Vec<CycleOperation>; NUM_DOTS] = &mut frame_operations[row_index];
+            // Technically this is done in the "previous" line, but this is so fast that we can just do this in the first cycle and use the evalution.
+            if row_index < 240 {
+                scanline[0].push(CycleOperation::SpriteEvaluation);
+            }
             // We do this for 256 pixels in 8-bit increments (so 256 / 8 = 32)
             for x in 0..32 {
                 let offset = 8 * x;
@@ -377,6 +481,7 @@ impl Ppu {
             pattern_byte_sr_lo: ShiftRegister::initialize(),
             attribute_byte_sr: ShiftRegister::initialize(),
             image_buffer: DoubleBuffer::initialize(),
+            line_sprite_pixels: Vec::with_capacity(0x100),
         }
     }
 
@@ -418,12 +523,12 @@ impl Ppu {
             // OAM Address 
             0x2003 => {
                 self.oam_address = data;
-                // Increment OAM after the write.
-                self.oam_address = self.oam_address.wrapping_add(1);
             },
             // OAM Data
             0x2004 => {
                 self.memory.oam_data.write_byte(self.oam_address as usize, data);
+                // Increment OAM after the write.
+                self.oam_address = self.oam_address.wrapping_add(1);
             },
             // PPU Scroll
             0x2005 => {
@@ -534,6 +639,12 @@ impl Ppu {
             },
             // PPU Data
             0x2007 => {
+                // Increment VRAM address
+                // let inc = match self.control.vram_address_increment() {
+                //     VramIncrement::CoarseX => 1,
+                //     VramIncrement::Y => 32,
+                // };
+                // self.loopy_v = self.loopy_v.wrapping_add(inc);
                 self.ppu_data.read()
             },
             _ => panic!("Unimplemented address read from: 0x{:4X}", address),
@@ -604,10 +715,6 @@ impl Ppu {
     // Returns a number from 0 -> 7 indicating the fine y. Used for picking out the correct 8x1 pixel sliver from our tiles.
     fn fine_y(&self) -> u8 {
         ((self.loopy_v & 0x7000) >> 12) as u8
-    }
-
-    fn get_system_color(&self, color_index: u8) -> Pixel {
-        SYSTEM_PALETTE_COLORS[color_index as usize]
     }
 
     pub fn get_image(&self) -> Option<Vec<Pixel>> {
@@ -681,28 +788,50 @@ impl Ppu {
             },
             CycleOperation::IncrementHorizontalV => {
                 // Incrementing the horizontal VRAM address means building a pixel line and rendering!
-
-                // Get a pixel line from the high and low bytes
-                let mut pixel_line = Vec::with_capacity(8);
-                for i in 0..8 {
-                    let shift = 15 - self.fine_x - i;
-                    let hi = self.pattern_byte_sr_hi.bit(shift);
-                    let lo = self.pattern_byte_sr_lo.bit(shift);
-                    // Current tile's palette, use next byte (lo) if fine_x bleeds over
-                    let palette = if self.fine_x + i <= 7 {
-                        self.attribute_byte_sr.hi()   // current tile
-                    } else {
-                        self.attribute_byte_sr.lo()     // neighbor tile
-                    } & 0x03;
-                    let value = (((hi << 1) | lo) & 0x03) as u16;
-
-                    // Get the right color value from Palette RAM
-                    // Color index is a 6-bit index into system colors.
-                    let color_index = (self.memory.read_byte(PALETTE_RAM | ((palette as u16) << 2) | (value as u16))) & 0x3F;
-                    pixel_line.push(self.get_system_color(color_index));
-                }
-
                 if self.frame_index.0 < 240 && self.frame_index.1 < 257 {
+                    // Get a background pixel line from the high and low bytes of the background
+                    let mut bg_pixel_line = Vec::with_capacity(8);
+                    for i in 0..8 {
+                        let shift = 15 - self.fine_x - i;
+                        let hi = self.pattern_byte_sr_hi.bit(shift);
+                        let lo = self.pattern_byte_sr_lo.bit(shift);
+                        // Current tile's palette, use next byte (lo) if fine_x bleeds over
+                        let palette = if self.fine_x + i <= 7 {
+                            self.attribute_byte_sr.hi()   // current tile
+                        } else {
+                            self.attribute_byte_sr.lo()   // neighbor tile
+                        } & 0x03;
+                        let value = (((hi << 1) | lo) & 0x03) as u16;
+
+                        // Get the right color value from Palette RAM.
+
+                        if value == 0x00 {
+                            let transparent_index = self.memory.read_byte(BG_PALETTE_RAM);
+                            bg_pixel_line.push((0x0000, get_system_color(transparent_index)))
+                        } else {
+                            // Color index is a 6-bit index into system colors.
+                            let color_index = (self.memory.read_byte(BG_PALETTE_RAM | ((palette as u16) << 2) | (value as u16))) & 0x3F;
+                            bg_pixel_line.push((value, get_system_color(color_index)));
+                        }
+                    }
+
+                    // Get a sprite pixel line as well.
+                    let mut sprite_pixel_line = Vec::with_capacity(8);
+                    for i in 0..8 {
+                        sprite_pixel_line.push(self.line_sprite_pixels[self.frame_index.1 - (8 - i)]);
+                    }
+
+                    // Now combine the pixels into a single pixel_line to push.
+                    let mut pixel_line = Vec::with_capacity(8);
+                    for i in 0..8 {
+                        let (bg_value, bg_color) = bg_pixel_line[i];
+                        pixel_line.push(match sprite_pixel_line[i] {
+                            Some(SpritePixel(sp_color, SpritePriority::InFrontOfBackground)) => sp_color,
+                            Some(SpritePixel(sp_color, SpritePriority::BehindBackground)) if bg_value == 0 => sp_color,
+                            _ => bg_color,
+                        });
+                    }
+
                     self.image_buffer.back().extend(pixel_line);
                 }
 
@@ -715,6 +844,12 @@ impl Ppu {
             CycleOperation::IncrementVerticalV => {
                 self.increment_y();
             },
+            CycleOperation::SpriteEvaluation => {
+                self.line_sprite_pixels = self.memory.create_sprite_line_pixels(
+                    self.control.sprite_pattern_table_address() as u16, 
+                    self.frame_index.0.try_into().expect("Frame Index called from here shouldn't exceed 240")
+                );
+            }
             CycleOperation::ClearVblank => {
                 self.vblank = false;
             },
@@ -723,18 +858,14 @@ impl Ppu {
                 self.image_buffer.swap();
             },
             CycleOperation::EqualizeHorizontalVT => {
-                if self.rendering_enabled() {
-                    // Copy over the horizontal bits
-                    // v: ....A.. ...BCDEF <- t: ....A.. ...BCDEF
-                    self.loopy_v = (self.loopy_v & 0xFBE0) | (self.loopy_t & 0x041F)
-                }
+                // Copy over the horizontal bits
+                // v: ....A.. ...BCDEF <- t: ....A.. ...BCDEF
+                self.loopy_v = (self.loopy_v & 0xFBE0) | (self.loopy_t & 0x041F)
             },
             CycleOperation::EqualizeVerticalVT => {
-                if self.rendering_enabled() {
-                    // Copy over the vertical bits.
-                    // v: GHIA.BC DEF..... <- t: GHIA.BC DEF.....
-                    self.loopy_v = (self.loopy_v & 0x041F) | (self.loopy_t & 0xFBE0)
-                }
+                // Copy over the vertical bits.
+                // v: GHIA.BC DEF..... <- t: GHIA.BC DEF.....
+                self.loopy_v = (self.loopy_v & 0x041F) | (self.loopy_t & 0xFBE0)
             },
             CycleOperation::SpriteZeroCheck => {
                 // Unimplemented for now.
@@ -753,55 +884,9 @@ impl Ppu {
     }
 }
 
-struct Index {
-    block_index: u8,
-    quadrant: u8,
-    tile_x: u8,
-    tile_y: u8,
-    fine_x: u8,
-    fine_y: u8,
-}
-
-const BLOCK_SIZE: u8 = 32; // Blocks are 32x32 pixels
-const TILE_SIZE: u8 = 8; // Tiles are 8x8.
-
-// Returns the Index for a specific pixel.
-// (0, 0) <= (x,y) < (256, 240)
-// Panics if not within bounds.
-fn get_index(x: u8, y: u8) -> Index {
-    let block_index = 8 * (y / BLOCK_SIZE) + (x / BLOCK_SIZE);
-    let tile_x = x / TILE_SIZE;
-    let tile_y = y / TILE_SIZE;
-    let fine_x = x % TILE_SIZE;
-    let fine_y = y % TILE_SIZE;
-
-    // Quadrants are laid out like the following in a single block:
-    // |-------|-------|
-    // |   0   |   1   |
-    // |-------|-------|
-    // |   2   |   3   |
-    // |-------|-------|
-    // It turns out that they are effectively indexed by taking the bit 5 of x and bit 5 of y.
-    // Specifically the quadrant is just y.5|x.5
-    let quadrant = (y >> 4 | x >> 5) & 0x11;
-
-    Index { block_index, quadrant, tile_x, tile_y, fine_x, fine_y }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_indexing_on_almost_last_pixel() {
-        let Index {block_index, quadrant, tile_x, tile_y, fine_x, fine_y } = get_index(254, 239);
-        assert_eq!(block_index, 63);
-        assert_eq!(quadrant, 1);
-        assert_eq!(tile_x, 31);
-        assert_eq!(tile_y, 29);
-        assert_eq!(fine_x, 6);
-        assert_eq!(fine_y, 7);
-    }
 
     #[test]
     fn test_initialize_ppu() {

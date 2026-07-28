@@ -104,7 +104,7 @@ fn main_nes_loop(cpu: &mut cpu::Cpu) -> Option<ColorImage> {
         cpu.set_nmi();
     }
 
-    // Check for a DMA and stall the cpu if it did.
+    // Check for a DMA and stall the cpu for a number of cycles if it did.
     if cpu.ppu().borrow().dma_flag() {
         cpu.cycle_budget -= DMA_CPU_CYCLE_COUNT;
     }

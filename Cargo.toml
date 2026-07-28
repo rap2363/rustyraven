@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 eframe = "0.35.0"
 egui = "0.35.0"
+minifb = "0.28"
 
 [[bin]]
 name = "test_opcodes"
