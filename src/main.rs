@@ -1,4 +1,5 @@
 mod addressing_modes;
+mod controller;
 mod cpu;
 mod memory;
 mod ppu;
@@ -7,6 +8,7 @@ mod processor_status;
 mod rom;
 
 const DMA_CPU_CYCLE_COUNT: i32 = 512;
+const NUM_FRAME_CYCLES: usize = 87296; // 256 * 341
 
 // Rendering code, consider moving
 // TODO: Move this code once you confirm it's WAI
@@ -60,7 +62,7 @@ impl eframe::App for Emulation {
 // TODO (replace this with whatever)
 fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
     // Initializing Code for CPU
-    let nes_rom = rom::NesRom::from_file_path("src/resources/donkey_kong.nes").expect("File not found!");
+    let nes_rom = rom::NesRom::from_file_path("src/resources/smb.nes").expect("File not found!");
 
     let mut cpu = cpu::Cpu::initialize();
     // Load the prg_rom data into main memory starting at 0x8000-0xFFFF
@@ -70,7 +72,7 @@ fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
         // Copy it to the upper bank as well.
         cpu.memory.write_bytes(0xC000, &nes_rom.prg_rom_data);
     }
-    cpu.ppu().borrow_mut().write_chr_rom_data(&nes_rom.chr_rom_data);
+    cpu.bus.borrow_mut().ppu().write_chr_rom_data(&nes_rom.chr_rom_data);
 
     println!("NMI Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFA));
     println!("RES Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFC));
@@ -81,6 +83,25 @@ fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
     cpu.cycle_count = 7;
 
     loop {
+        for (key, controller_button) in vec![
+            (egui::Key::A, controller::Button::A),
+            (egui::Key::S, controller::Button::B),
+            (egui::Key::ShiftRight, controller::Button::Select),
+            (egui::Key::Enter, controller::Button::Start),
+            (egui::Key::ArrowLeft, controller::Button::Left),
+            (egui::Key::ArrowRight, controller::Button::Right),
+            (egui::Key::ArrowUp, controller::Button::Up),
+            (egui::Key::ArrowDown, controller::Button::Down),
+        ] {
+            if ctx.input(|i| i.key_pressed(key)) {
+                cpu.bus.borrow_mut().controller_1().set_button(controller_button);
+            }
+
+            if ctx.input(|i| i.key_released(key)) {
+                cpu.bus.borrow_mut().controller_1().clear_button(controller_button);
+            }
+        }
+
         if let Some(image) = main_nes_loop(&mut cpu) && tx.send(image).is_err() {
             return; // window closed, receiver dropped
         }
@@ -93,23 +114,22 @@ fn main_nes_loop(cpu: &mut cpu::Cpu) -> Option<ColorImage> {
     // Execute one cycle for the CPU
     cpu.execute_cycles_for_one_instruction();
     // Execute 3 cycles for the ppu.
-    let ppu = cpu.ppu();
-    ppu.borrow_mut().execute_cycle();
-    ppu.borrow_mut().execute_cycle();
-    ppu.borrow_mut().execute_cycle();
+    cpu.bus.borrow_mut().ppu().execute_cycle();
+    cpu.bus.borrow_mut().ppu().execute_cycle();
+    cpu.bus.borrow_mut().ppu().execute_cycle();
 
     // Check for an NMI and set the interrupt.
     // This is still a *little* hacky because the read from 2002 clears the Vblank flag on that register.
-    if cpu.ppu().borrow().nmi() && cpu.ppu().borrow_mut().read_io_register(0x2002) & 0x80 == 0x80 {
+    if cpu.bus.borrow_mut().ppu().nmi() && cpu.bus.borrow_mut().ppu().read_io_register(0x2002) & 0x80 == 0x80 {
         cpu.set_nmi();
     }
 
     // Check for a DMA and stall the cpu for a number of cycles if it did.
-    if cpu.ppu().borrow().dma_flag() {
+    if cpu.bus.borrow_mut().ppu().dma_flag() {
         cpu.cycle_budget -= DMA_CPU_CYCLE_COUNT;
     }
 
-    if let Some(pixels) = cpu.ppu().borrow().get_image() {
+    if let Some(pixels) = cpu.bus.borrow_mut().ppu().get_image() {
         // TODO: We should do this on a fixed interval runtime but threading in tokio is going
         // to be a hassle..
         std::thread::sleep(std::time::Duration::from_millis(11));

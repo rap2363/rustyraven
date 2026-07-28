@@ -77,15 +77,29 @@ enum Nmi {
     Interrupt,
 }
 
-struct Bus {
-    ppu: Rc<RefCell<Ppu>>,
-    controller_1: Rc<RefCell<Controller>>,
+pub struct Bus {
+    ppu: Ppu,
+    controller_1: Controller,
     // Eventually other peripherals will go here too.
+}
+
+impl Bus {
+    pub fn from(ppu: Ppu, controller_1: Controller) -> Self {
+        Self { ppu, controller_1 }
+    }
+
+    pub fn ppu(&mut self) -> &mut Ppu {
+        &mut self.ppu
+    }
+
+    pub fn controller_1(&mut self) -> &mut Controller {
+        &mut self.controller_1
+    }
 }
 
 pub struct Cpu {
     pub memory: CpuMemory,
-    bus: Bus,
+    pub bus: Rc<RefCell<Bus>>,
     pub processor_status: ProcessorStatus,
     pub pc: u16,
     pub sp: u8,
@@ -122,10 +136,10 @@ impl FetchInstructionResult {
 
 impl Cpu {
     pub fn initialize() -> Self {
-        let ppu = Rc::new(RefCell::new(Ppu::initialize()));
+        let bus = Rc::new(RefCell::new(Bus::from(Ppu::initialize(), Controller::initialize())));
         Self {
-            memory: CpuMemory::initialize(ppu.clone()),
-            bus: Bus { ppu: ppu.clone(), controller_1: Controller::initialize(ButtonReader::Keyboard) },
+            memory: CpuMemory::initialize(bus.clone()),
+            bus: bus,
             processor_status: ProcessorStatus::initialize(),
             pc: RESET_ADDRESS,
             sp: 0xFD,
@@ -136,10 +150,6 @@ impl Cpu {
             cycle_budget: 0,
             nmi: Nmi::None,
         }
-    }
-
-    pub fn ppu(&mut self) -> Rc<RefCell<Ppu>> {
-        self.bus.ppu.clone()
     }
 
     pub fn to_string(&self) -> String {

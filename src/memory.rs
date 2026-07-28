@@ -1,3 +1,9 @@
+use std::rc::Rc;
+use std::cell::RefCell;
+use crate::cpu::Bus;
+use crate::ppu::Ppu;
+use crate::controller::Controller;
+
 // Represents a static, contiguous layout of memory (in bytes) and offers
 // low-level API's for reading and writing. Multiple segments are used
 // to build up main memory (RAM) for the CPU.
@@ -28,23 +34,20 @@ impl<const N: usize> Segment<N> {
     }
 }
 
-use std::rc::Rc;
-use std::cell::RefCell;
-use crate::ppu::Ppu;
 pub struct CpuMemory {
     ram: Segment<0x0800>,
     lower_io: Segment<0x0008>,
     upper_memory: Segment<0xC000>,
-    ppu: Rc<RefCell<Ppu>>,
+    bus: Rc<RefCell<Bus>>,
 }
 
 impl CpuMemory {
-    pub fn initialize(ppu: Rc<RefCell<Ppu>>) -> Self {
+    pub fn initialize(bus: Rc<RefCell<Bus>>) -> Self {
         Self {
             ram: Segment::<0x0800>::initialize(),
             lower_io: Segment::<0x0008>::initialize(),
             upper_memory: Segment::<0xC000>::initialize(),
-            ppu: ppu,
+            bus: bus,
         }
     }
 
@@ -66,13 +69,22 @@ impl CpuMemory {
             let lower_io_address = (address - 0x2000) % 0x0008;
             self.lower_io.write_byte(lower_io_address as usize, value);
             // Write to the appropriate ppu listener.
-            self.ppu.borrow_mut().write_io_register(0x2000 + lower_io_address, value);
+            self.bus.borrow_mut().ppu().write_io_register(0x2000 + lower_io_address, value);
         } else {
             // Upper Memory
             let upper_memory_address = address - 0x4000;
             // DMA
             if upper_memory_address == 0x0014 {
-                self.ppu.borrow_mut().dma(&self.get_dma_bytes(value))
+                self.bus.borrow_mut().ppu().dma(&self.get_dma_bytes(value))
+            }
+
+            // Controller 1
+            if upper_memory_address == 0x0016 {
+                if value & 0x01 == 0x01 {
+                    self.bus.borrow_mut().controller_1().strobe_high();
+                } else {
+                    self.bus.borrow_mut().controller_1().strobe_low();
+                }
             }
             self.upper_memory.write_byte(upper_memory_address as usize, value);
         }
@@ -105,10 +117,16 @@ impl CpuMemory {
             // Read from the appropriate I/O register, *not* directly from memory!
             // Note we require a mutable reference to the PPU (this is because the read actually causes
             // some state change within the PPU potentially (e.g. the clearing of vblank)).
-            self.ppu.borrow_mut().read_io_register(0x2000 + lower_io_address)
+            self.bus.borrow_mut().ppu().read_io_register(0x2000 + lower_io_address)
         } else {
             // Upper Memory
             let upper_memory_address = address - 0x4000;
+
+            // Controller 1
+            if upper_memory_address == 0x0016 {
+                return self.bus.borrow_mut().controller_1().read();
+            }
+
             self.upper_memory.read_byte(upper_memory_address as usize)
         }
     }
@@ -167,7 +185,8 @@ mod tests {
     #[test]
     fn test_memory_mirroring() {
         let ppu = Ppu::initialize();
-        let mut cpu_memory = CpuMemory::initialize(Rc::new(RefCell::new(ppu)));
+        let controller_1 = Controller::initialize();
+        let mut cpu_memory = CpuMemory::initialize(Rc::new(RefCell::new(Bus::from(ppu, controller_1))));
         cpu_memory.write_byte(0x0803, 42);
         cpu_memory.write_byte(0x2009, 43);
         // Assert that the write can be read in a "mirrored" way throughout RAM.

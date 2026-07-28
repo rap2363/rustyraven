@@ -32,7 +32,7 @@ enum SpritePriority {
 }
 
 #[derive(Clone, Copy)]
-struct SpritePixel(Pixel, SpritePriority);
+struct SpritePixel(Pixel, SpritePriority, bool); // bool encodes whether the pixel is for a sprite 0 pixel or not.
 
 // I stole this from myself (WhiteRaven)
 const SYSTEM_PALETTE_COLORS: [Pixel; 64] = [
@@ -170,8 +170,8 @@ impl PpuMemory {
         ])
     }
 
-    fn create_sprite_line_pixels(&self, sprite_pattern_table: u16, scanline_y: u8) -> Vec<Option<SpritePixel>> {
-        // Creates a Vec of 256 sprite pixels for the line.
+    fn get_line_sprites(&self, scanline_y: u8) -> Vec<Sprite> {
+        // Creates a sprites for the line.
         let mut sprites_on_scanline = Vec::with_capacity(8);
         for i in (0..0x100).step_by(4) {
             let index = i as usize;
@@ -189,12 +189,17 @@ impl PpuMemory {
                             self.oam_data.read_byte(index + 1),
                             self.oam_data.read_byte(index + 2),
                             self.oam_data.read_byte(index + 3),
-                        ]
+                        ],
+                        index == 0,
                     ));
                 }
             }
         }
 
+        sprites_on_scanline
+    }
+
+    fn create_sprite_line_pixels(&self, sprites_on_scanline: Vec<Sprite>, sprite_pattern_table: u16, scanline_y: u8) -> Vec<Option<SpritePixel>> {
         // 256 pixel initialization.
         let mut sprite_pixels = vec![None; 0x100];
 
@@ -225,7 +230,7 @@ impl PpuMemory {
                 // Color index is a 6-bit index into system colors.
                 let color_index = (self.read_byte(SPRITE_PALETTE_RAM | ((palette as u16) << 2) | (value as u16))) & 0x3F;
                 let pixel = get_system_color(color_index);
-                sprite_pixels[i as usize] = Some(SpritePixel(pixel, sprite.priority));
+                sprite_pixels[i as usize] = Some(SpritePixel(pixel, sprite.priority, sprite.is_sprite_zero()));
             }
         }
         sprite_pixels
@@ -248,10 +253,8 @@ enum CycleOperation {
     SetVblank,
     ClearVblank,
     SpriteEvaluation,
-    SpriteZeroCheck,
-    SpriteOverflowCheck,
-    SpriteLsb,
-    SpriteMsb,
+    SpriteZeroClear,
+    SpriteOverflowClear,
 }
 
 struct LatchedDataBuffer {
@@ -348,10 +351,11 @@ struct Sprite {
     priority: SpritePriority,
     h_flip: bool,
     v_flip: bool,
+    is_sprite_zero: bool,
 }
 
 impl Sprite {
-    fn from(bytes: &[u8; 4]) -> Self {
+    fn from(bytes: &[u8; 4], is_sprite_zero: bool) -> Self {
         let [top_y, tile_index, attributes, left_x] = *bytes;
 
         let palette_bits = attributes & 0x03;
@@ -359,7 +363,11 @@ impl Sprite {
         let h_flip = (attributes >> 6) & 0x01 == 0x01;
         let v_flip = (attributes >> 7) & 0x01 == 0x01;
 
-        Self { left_x, top_y, tile_index, palette_bits, priority, h_flip, v_flip }
+        Self { left_x, top_y, tile_index, palette_bits, priority, h_flip, v_flip, is_sprite_zero: is_sprite_zero }
+    }
+
+    fn is_sprite_zero(&self) -> bool {
+        self.is_sprite_zero
     }
 }
 
@@ -426,8 +434,6 @@ impl Ppu {
                 let offset = 256 + 8 * x;
                 scanline[offset + 2].push(CycleOperation::UnusedNameTableAccess);
                 scanline[offset + 3].push(CycleOperation::IgnoredNameTableAccess);
-                scanline[offset + 5].push(CycleOperation::SpriteLsb);
-                scanline[offset + 7].push(CycleOperation::SpriteMsb);
             }
             
             // First two tiles on the next scanline
@@ -451,7 +457,7 @@ impl Ppu {
         frame_operations[241][1].push(CycleOperation::SetVblank);
         // Pre-renders
         let prerender_scanline = &mut frame_operations[PRERENDER_SCANLINE];
-        prerender_scanline[1] = vec![CycleOperation::ClearVblank, CycleOperation::SpriteZeroCheck, CycleOperation::SpriteOverflowCheck];
+        prerender_scanline[1] = vec![CycleOperation::ClearVblank, CycleOperation::SpriteZeroClear, CycleOperation::SpriteOverflowClear];
         for x in 280..=304 {
             prerender_scanline[x].push(CycleOperation::EqualizeVerticalVT);
         }
@@ -615,6 +621,7 @@ impl Ppu {
                 let v_bit = if self.vblank { 0x80 } else { 0x00 };
                 let s_bit = if self.sprite_overflow { 0x40 } else { 0x00 };
                 let z_bit = if self.sprite_zero_hit { 0x20 } else { 0x00 };
+
                 // Clear the VBlank flag.
                 self.vblank = false;
                 // Reset the write latch
@@ -826,8 +833,22 @@ impl Ppu {
                     for i in 0..8 {
                         let (bg_value, bg_color) = bg_pixel_line[i];
                         pixel_line.push(match sprite_pixel_line[i] {
-                            Some(SpritePixel(sp_color, SpritePriority::InFrontOfBackground)) => sp_color,
-                            Some(SpritePixel(sp_color, SpritePriority::BehindBackground)) if bg_value == 0 => sp_color,
+                            Some(SpritePixel(sp_color, SpritePriority::InFrontOfBackground, is_sprite_zero)) => {
+                                if is_sprite_zero {
+                                    self.sprite_zero_hit = true;
+                                }
+                                sp_color
+                            },
+                            Some(SpritePixel(sp_color, SpritePriority::BehindBackground, is_sprite_zero)) => {
+                                if bg_value == 0 {
+                                    sp_color
+                                } else {
+                                    if is_sprite_zero {
+                                        self.sprite_zero_hit = true;
+                                    }
+                                    bg_color
+                                }
+                            },
                             _ => bg_color,
                         });
                     }
@@ -845,9 +866,17 @@ impl Ppu {
                 self.increment_y();
             },
             CycleOperation::SpriteEvaluation => {
+                let scanline_y = self.frame_index.0.try_into().expect("Frame Index called from here shouldn't exceed 240");
+                let sprites = self.memory.get_line_sprites(scanline_y);
+                if sprites.len() > 8 {
+                    // Check and set sprite overflow if we see more than 8 sprites on the line!
+                    self.sprite_overflow = true;
+                }
+
                 self.line_sprite_pixels = self.memory.create_sprite_line_pixels(
+                    sprites,
                     self.control.sprite_pattern_table_address() as u16, 
-                    self.frame_index.0.try_into().expect("Frame Index called from here shouldn't exceed 240")
+                    scanline_y,
                 );
             }
             CycleOperation::ClearVblank => {
@@ -867,17 +896,11 @@ impl Ppu {
                 // v: GHIA.BC DEF..... <- t: GHIA.BC DEF.....
                 self.loopy_v = (self.loopy_v & 0x041F) | (self.loopy_t & 0xFBE0)
             },
-            CycleOperation::SpriteZeroCheck => {
-                // Unimplemented for now.
+            CycleOperation::SpriteZeroClear => {
+                self.sprite_zero_hit = false;
             },
-            CycleOperation::SpriteOverflowCheck => {
-                // Unimplemented for now.
-            },
-            CycleOperation::SpriteLsb => {
-                // Unimplemented for now.
-            },
-            CycleOperation::SpriteMsb => {
-                // Unimplemented for now.
+            CycleOperation::SpriteOverflowClear => {
+                self.sprite_overflow = false;
             },
             CycleOperation::IgnoredNameTableAccess => {},
         }
