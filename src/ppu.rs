@@ -22,7 +22,7 @@ struct PpuMemory {
 }
 
 // Red-Green-Blue
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct Pixel(pub u8, pub u8, pub u8);
 
 #[derive(Copy, Clone)]
@@ -131,7 +131,10 @@ impl PpuMemory {
             self.name_tables.write_byte(name_table_byte as usize, value);
         } else {
             // Palette Memory
-            let palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
+            let mut palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
+            if palette_memory_address & 0x0013 == 0x0010 {
+                palette_memory_address &= 0xFFEF;
+            }
             self.palettes.write_byte(palette_memory_address as usize, value);
         }
     }
@@ -257,27 +260,14 @@ enum CycleOperation {
     SpriteOverflowClear,
 }
 
-struct LatchedDataBuffer {
-    buffer: u8,
-    data: u8,
-}
+struct LatchedDataBuffer(u8);
 
 impl LatchedDataBuffer {
-    fn initialize() -> Self {
-        Self {
-            buffer: 0x00,
-            data: 0x00,
-        }
-    }
-
-    fn read(&mut self) -> u8 {
-        let data_to_return = self.buffer;
-        self.buffer = self.data;
-        data_to_return
-    }
-
-    fn write(&mut self, data: u8) {
-        self.data = data;
+    fn read_and_set(&mut self, new_data: u8) -> u8 {
+        let data = self.0;
+        // Shift in the new data.
+        self.0 = new_data;
+        data
     }
 }
 
@@ -468,7 +458,7 @@ impl Ppu {
             mask: PpuMask::from(0x00),
             oam_address: 0x00,
             dma_complete: Cell::new(false),
-            ppu_data: LatchedDataBuffer::initialize(),
+            ppu_data: LatchedDataBuffer(0x00),
             loopy_v: 0x0000,
             loopy_t: 0x0000,
             fine_x: 0x00,
@@ -579,7 +569,6 @@ impl Ppu {
                     WriteToggle::Second => {
                         self.loopy_t = (self.loopy_t & 0xFF00) | (ppu_address as u16);
                         self.loopy_w = WriteToggle::First;
-                        // TODO: Should we latch this one cycle?
                         self.loopy_v = self.loopy_t;
                     },
                 }
@@ -588,14 +577,7 @@ impl Ppu {
             0x2007 => {
                 // Write the data to memory
                 self.memory.write_byte(self.loopy_v, data);
-                // Write the byte to our latch too
-                self.ppu_data.write(data);
-                // Increment VRAM address
-                let inc = match self.control.vram_address_increment() {
-                    VramIncrement::CoarseX => 1,
-                    VramIncrement::Y => 32,
-                };
-                self.loopy_v = self.loopy_v.wrapping_add(inc);
+                self.increment_vram();
             },
             _ => panic!("Unimplemented address written to: 0x{:4X}, 0x{:2X}", address, data),
         }
@@ -619,14 +601,14 @@ impl Ppu {
                 // |+-------- Sprite 0 hit flag
                 // +--------- Vblank flag, cleared on read.
                 let v_bit = if self.vblank { 0x80 } else { 0x00 };
-                let s_bit = if self.sprite_overflow { 0x40 } else { 0x00 };
-                let z_bit = if self.sprite_zero_hit { 0x20 } else { 0x00 };
+                let s_bit = if self.sprite_zero_hit { 0x40 } else { 0x00 };
+                let o_bit = if self.sprite_overflow { 0x20 } else { 0x00 };
 
                 // Clear the VBlank flag.
                 self.vblank = false;
                 // Reset the write latch
                 self.loopy_w = WriteToggle::First;
-                v_bit | s_bit | z_bit
+                v_bit | s_bit | o_bit
             },
             // OAM Address 
             0x2003 => self.oam_address,
@@ -646,18 +628,27 @@ impl Ppu {
             },
             // PPU Data
             0x2007 => {
-                // Increment VRAM address
-                // let inc = match self.control.vram_address_increment() {
-                //     VramIncrement::CoarseX => 1,
-                //     VramIncrement::Y => 32,
-                // };
-                // self.loopy_v = self.loopy_v.wrapping_add(inc);
-                self.ppu_data.read()
+                let data = if (self.loopy_v & 0x3FFF) >= 0x3400 {
+                    let d = self.memory.read_byte(self.loopy_v);
+                    self.ppu_data.read_and_set(d);
+                    d
+                } else {
+                    self.ppu_data.read_and_set(self.memory.read_byte(self.loopy_v))
+                };
+                self.increment_vram();
+                data
             },
             _ => panic!("Unimplemented address read from: 0x{:4X}", address),
         }
     }
 
+    fn increment_vram(&mut self) {
+        let inc = match self.control.vram_address_increment() {
+            VramIncrement::CoarseX => 1,
+            VramIncrement::Y => 32,
+        };
+        self.loopy_v = self.loopy_v.wrapping_add(inc);
+    }
     pub fn dma(&mut self, dma_bytes: &[u8]) {
         // Write all 256 bytes into oam_data.
         self.memory.oam_data.write_bytes(0x00, dma_bytes);
@@ -757,7 +748,6 @@ impl Ppu {
     // |+-------------- H: Half of pattern table (0: "left"; 1: "right")
     // +--------------- 0: Pattern table is at $0000-$1FFF
     fn execute_operation(&mut self, operation: CycleOperation) {
-        // TODO: Is this right?
          // Vblank flag maintenance happens regardless of rendering state. Otherwise skip if we're not rendering.
         match operation {
             CycleOperation::SetVblank | CycleOperation::ClearVblank => {},
@@ -799,7 +789,7 @@ impl Ppu {
                     // Get a background pixel line from the high and low bytes of the background
                     let mut bg_pixel_line = Vec::with_capacity(8);
                     for i in 0..8 {
-                        let shift = 15 - self.fine_x - i;
+                        let shift: u8 = 15 - self.fine_x - i;
                         let hi = self.pattern_byte_sr_hi.bit(shift);
                         let lo = self.pattern_byte_sr_lo.bit(shift);
                         // Current tile's palette, use next byte (lo) if fine_x bleeds over
@@ -810,11 +800,13 @@ impl Ppu {
                         } & 0x03;
                         let value = (((hi << 1) | lo) & 0x03) as u16;
 
+                        // let color_index = (self.memory.read_byte(BG_PALETTE_RAM | ((palette as u16) << 2) | (value as u16))) & 0x3F;
+                        // bg_pixel_line.push((value, get_system_color(color_index)));
                         // Get the right color value from Palette RAM.
-
+                        // Color index is a 6-bit index into system colors.
                         if value == 0x00 {
                             let transparent_index = self.memory.read_byte(BG_PALETTE_RAM);
-                            bg_pixel_line.push((0x0000, get_system_color(transparent_index)))
+                            bg_pixel_line.push((value, get_system_color(transparent_index)))
                         } else {
                             // Color index is a 6-bit index into system colors.
                             let color_index = (self.memory.read_byte(BG_PALETTE_RAM | ((palette as u16) << 2) | (value as u16))) & 0x3F;

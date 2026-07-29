@@ -23,27 +23,40 @@ pub enum PageBoundaryResult {
     PageBoundaryCrossed,
 }
 
-pub struct AddressingModeData {
-    pub data: u8, // The actual data picked up by this addressing mode
-    pub address: Option<u16>, // The address of the data. Might be None for implied data.
-    pub page_boundary_result: PageBoundaryResult,
+#[derive(Copy, Clone, Debug)]
+pub enum AddressingModeData {
+    Implied,
+    Data(u8), // The actual data (used for implied or immediate modes)
+    Address(u16), // The address where the data is stored (used for indirect modes)
 }
 
 impl AddressingModeData {
-    fn new(data: u8, address: Option<u16>, page_boundary_result: PageBoundaryResult) -> Self {
-        Self { data, address, page_boundary_result }
+    pub fn as_data(self) -> Option<u8> {
+        if let AddressingModeData::Data(data) = self {
+            Some(data)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_address(self) -> Option<u16> {
+        if let AddressingModeData::Address(address) = self {
+            Some(address)
+        } else {
+            None
+        }
     }
 }
 
 impl AddressingMode {
     // Each addressing mode returns data, the address of said data (if possible), and whether or not a page boundary
     // was crossed. This is all measured with the PC set to the *next* instruction.
-    pub fn into_data(self, cpu: &Cpu) -> AddressingModeData {
+    pub fn into_data(self, cpu: &Cpu) -> (AddressingModeData, PageBoundaryResult) {
         match self {
-            Self::Implied => AddressingModeData::new(0x00, None, PageBoundaryResult::Irrelevant),
-            Self::Immediate(d) => AddressingModeData::new(d, None, PageBoundaryResult::Irrelevant),
-            Self::Absolute(address) => AddressingModeData::new(cpu.memory.read_byte(address), Some(address), PageBoundaryResult::Irrelevant),
-            Self::ZeroPage(address) => AddressingModeData::new(cpu.memory.read_byte_zero_page(address), Some(address as u16), PageBoundaryResult::Irrelevant),
+            Self::Implied => (AddressingModeData::Implied, PageBoundaryResult::Irrelevant),
+            Self::Immediate(d) => (AddressingModeData::Data(d), PageBoundaryResult::Irrelevant),
+            Self::Absolute(address) => (AddressingModeData::Address(address), PageBoundaryResult::Irrelevant),
+            Self::ZeroPage(address) => (AddressingModeData::Address(address as u16), PageBoundaryResult::Irrelevant),
             Self::IndexedX(address) => {
                 let pbr = if (address as u8).overflowing_add(cpu.x).1 {
                     PageBoundaryResult::PageBoundaryCrossed
@@ -51,7 +64,7 @@ impl AddressingMode {
                     PageBoundaryResult::SamePage
                 };
                 let final_address = address.wrapping_add(cpu.x as u16);
-                AddressingModeData::new(cpu.memory.read_byte(final_address), Some(final_address), pbr)
+                (AddressingModeData::Address(final_address), pbr)
             },
             Self::IndexedY(address) => {
                 let pbr = if (address as u8).overflowing_add(cpu.y).1 {
@@ -61,23 +74,23 @@ impl AddressingMode {
                 };
                 
                 let final_address = address.wrapping_add(cpu.y as u16);
-                AddressingModeData::new(cpu.memory.read_byte(final_address), Some(final_address), pbr)
+                (AddressingModeData::Address(final_address), pbr)
             },
             Self::IndexedZeroPageX(address) => {
                 let final_address = address.wrapping_add(cpu.x);
-                AddressingModeData::new(cpu.memory.read_byte_zero_page(final_address), Some(final_address as u16), PageBoundaryResult::Irrelevant)
+                (AddressingModeData::Address(final_address as u16), PageBoundaryResult::Irrelevant)
             },
             Self::IndexedZeroPageY(address) => {
                 let final_address = address.wrapping_add(cpu.y);
-                AddressingModeData::new(cpu.memory.read_byte_zero_page(final_address), Some(final_address as u16), PageBoundaryResult::Irrelevant)
+                (AddressingModeData::Address(final_address as u16), PageBoundaryResult::Irrelevant)
             },
             Self::Indirect(address) => {
                 let ptr_address = cpu.memory.read_two_bytes_wrapping_page(address);
-                AddressingModeData::new(0x00, Some(ptr_address), PageBoundaryResult::Irrelevant)
+                (AddressingModeData::Address(ptr_address), PageBoundaryResult::Irrelevant)
             },
             Self::IndirectZeroPageX(address) => {
                 let ptr_address = cpu.memory.read_two_bytes_zero_page(address.wrapping_add(cpu.x));
-                AddressingModeData::new(cpu.memory.read_byte(ptr_address), Some(ptr_address), PageBoundaryResult::Irrelevant)
+                (AddressingModeData::Address(ptr_address), PageBoundaryResult::Irrelevant)
             },
             Self::IndirectZeroPageY(address) => {
                 let ptr_address = cpu.memory.read_two_bytes_zero_page(address);
@@ -87,17 +100,17 @@ impl AddressingMode {
                     PageBoundaryResult::SamePage
                 };
                 let ptr_address = ptr_address.wrapping_add(cpu.y as u16);
-                AddressingModeData::new(cpu.memory.read_byte(ptr_address), Some(ptr_address), pbr)
+                (AddressingModeData::Address(ptr_address), pbr)
             },
             Self::Relative(offset) => {
                 // Check if PC + offset would result in an overflow
-                let final_address = cpu.pc as u16 + offset as u16;
+                // let final_address = cpu.pc as u16 + offset as u16;
                 let pbr = if (cpu.pc as u8).overflowing_add(offset).1 {
                     PageBoundaryResult::PageBoundaryCrossed
                 } else {
                     PageBoundaryResult::SamePage
                 };
-                AddressingModeData::new(offset, Some(final_address), pbr)
+                (AddressingModeData::Data(offset), pbr)
             },
         }
     }

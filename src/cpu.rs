@@ -1217,12 +1217,20 @@ impl Cpu {
         true
     }
 
+    fn get_data(&self, addressing_mode_data: AddressingModeData) -> u8 {
+        match addressing_mode_data {
+            AddressingModeData::Data(data) => data,
+            AddressingModeData::Address(address) => self.memory.read_byte(address),
+            AddressingModeData::Implied => panic!("Implied does not provide data by default!"),
+        }
+    }
+
     pub fn fetch_instruction_and_execute(&mut self) -> usize {
         let FetchInstructionResult { opcode, addressing_mode, cycles } = self.fetch_instruction();
 
         // Now our PC is at the next instruction, so offsets will be measured relative to that.
-        let AddressingModeData { data, address, page_boundary_result } = addressing_mode.into_data(self);
-        let pbc = page_boundary_result == PageBoundaryCrossed;
+        let (addressing_mode_data, pbr) = addressing_mode.into_data(self);
+        let pbc = pbr == PageBoundaryCrossed;
         let mut num_cycles = match (cycles, pbc) {
             (Cycles::Fixed(n), _) => n,
             (Cycles::PageCrossing(n), false) => n,
@@ -1230,88 +1238,96 @@ impl Cpu {
         };
         // Now we can actually *execute* the instruction.
         match opcode {
-            Opcode::ADC => self.adc(data),
-            Opcode::AND => self.and(data),
+            Opcode::ADC => self.adc(self.get_data(addressing_mode_data)),
+            Opcode::AND => self.and(self.get_data(addressing_mode_data)),
             Opcode::ASL => {
                 // We write to memory if we returned a specific address.
-                let (data, wl) = if let Some(address) = address {
-                    (data, WriteLocation::Memory(address))
+                let (data, write_location) = if let AddressingModeData::Address(address) = addressing_mode_data {
+                    (self.memory.read_byte(address), WriteLocation::Memory(address))
                 } else {
                     (self.a, WriteLocation::Accumulator)
                 };
-                self.asl(data, wl);
+                self.asl(data, write_location);
             },
-            Opcode::BCC => Self::calculate_branch_cycles(&mut num_cycles, self.bcc(data)),
-            Opcode::BCS => Self::calculate_branch_cycles(&mut num_cycles, self.bcs(data)),
-            Opcode::BEQ => Self::calculate_branch_cycles(&mut num_cycles, self.beq(data)),
-            Opcode::BIT => self.bit(data),
-            Opcode::BMI => Self::calculate_branch_cycles(&mut num_cycles, self.bmi(data)),
-            Opcode::BNE => Self::calculate_branch_cycles(&mut num_cycles, self.bne(data)),
-            Opcode::BPL => Self::calculate_branch_cycles(&mut num_cycles, self.bpl(data)),
+            Opcode::BCC => Self::calculate_branch_cycles(&mut num_cycles, self.bcc(self.get_data(addressing_mode_data))),
+            Opcode::BCS => Self::calculate_branch_cycles(&mut num_cycles, self.bcs(self.get_data(addressing_mode_data))),
+            Opcode::BEQ => Self::calculate_branch_cycles(&mut num_cycles, self.beq(self.get_data(addressing_mode_data))),
+            Opcode::BIT => self.bit(self.get_data(addressing_mode_data)),
+            Opcode::BMI => Self::calculate_branch_cycles(&mut num_cycles, self.bmi(self.get_data(addressing_mode_data))),
+            Opcode::BNE => Self::calculate_branch_cycles(&mut num_cycles, self.bne(self.get_data(addressing_mode_data))),
+            Opcode::BPL => Self::calculate_branch_cycles(&mut num_cycles, self.bpl(self.get_data(addressing_mode_data))),
             Opcode::BRK => self.brk(),
-            Opcode::BVC => Self::calculate_branch_cycles(&mut num_cycles, self.bvc(data)),
-            Opcode::BVS => Self::calculate_branch_cycles(&mut num_cycles, self.bvs(data)),
+            Opcode::BVC => Self::calculate_branch_cycles(&mut num_cycles, self.bvc(self.get_data(addressing_mode_data))),
+            Opcode::BVS => Self::calculate_branch_cycles(&mut num_cycles, self.bvs(self.get_data(addressing_mode_data))),
             Opcode::CLC => self.clc(),
             Opcode::CLD => self.cld(),
             Opcode::CLI => self.cli(),
             Opcode::CLV => self.clv(),
-            Opcode::CMP => self.cmp(data),
-            Opcode::CPX => self.cpx(data),
-            Opcode::CPY => self.cpy(data),
-            Opcode::DEC => self.dec(data, address.expect("Address should be supplied for a DEC!")),
+            Opcode::CMP => self.cmp(self.get_data(addressing_mode_data)),
+            Opcode::CPX => self.cpx(self.get_data(addressing_mode_data)),
+            Opcode::CPY => self.cpy(self.get_data(addressing_mode_data)),
+            Opcode::DEC => {
+                let address = addressing_mode_data.as_address().expect("Address expected for DEC");
+                let data = self.memory.read_byte(address);
+                self.dec(data, address)
+            },
             Opcode::DEX => self.dex(),
             Opcode::DEY => self.dey(),
-            Opcode::EOR => self.eor(data),
-            Opcode::INC => self.inc(data, address.expect("Address should be supplied for a INC!")),
+            Opcode::EOR => self.eor(self.get_data(addressing_mode_data)),
+            Opcode::INC => {
+                let address = addressing_mode_data.as_address().expect("Address expected for INC");
+                let data = self.memory.read_byte(address);
+                self.inc(data, address)
+            },
             Opcode::INX => self.inx(),
             Opcode::INY => self.iny(),
-            Opcode::JMP => self.jmp(address.expect("Address should have been supplied for a JMP!")),
-            Opcode::JSR => self.jsr(address.expect("Address should have been supplied for a JSR!")),
-            Opcode::LDA => self.lda(data),
-            Opcode::LDX => self.ldx(data),
-            Opcode::LDY => self.ldy(data),
+            Opcode::JMP => self.jmp(addressing_mode_data.as_address().expect("Address should have been supplied for a JMP!")),
+            Opcode::JSR => self.jsr(addressing_mode_data.as_address().expect("Address should have been supplied for a JSR!")),
+            Opcode::LDA => self.lda(self.get_data(addressing_mode_data)),
+            Opcode::LDX => self.ldx(self.get_data(addressing_mode_data)),
+            Opcode::LDY => self.ldy(self.get_data(addressing_mode_data)),
             Opcode::LSR => {
                 // We write to memory if we returned a specific address.
-                let (data, wl) = if let Some(address) = address {
-                    (data, WriteLocation::Memory(address))
+                let (data, write_location) = if let AddressingModeData::Address(address) = addressing_mode_data {
+                    (self.memory.read_byte(address), WriteLocation::Memory(address))
                 } else {
                     (self.a, WriteLocation::Accumulator)
                 };
-                self.lsr(data, wl);
+                self.lsr(data, write_location);
             },
             Opcode::NOP => {}, // an actual noop
-            Opcode::ORA => self.ora(data),
+            Opcode::ORA => self.ora(self.get_data(addressing_mode_data)),
             Opcode::PHA => self.pha(),
             Opcode::PHP => self.php(),
             Opcode::PLA => self.pla(),
             Opcode::PLP => self.plp(),
             Opcode::ROL => {
                 // We write to memory if we returned a specific address.
-                let (data, wl) = if let Some(address) = address {
-                    (data, WriteLocation::Memory(address))
+                let (data, write_location) = if let AddressingModeData::Address(address) = addressing_mode_data  {
+                    (self.memory.read_byte(address), WriteLocation::Memory(address))
                 } else {
                     (self.a, WriteLocation::Accumulator)
                 };
-                self.rol(data, wl);
+                self.rol(data, write_location);
             },
             Opcode::ROR => {
                 // We write to memory if we returned a specific address.
-                let (data, wl) = if let Some(address) = address {
-                    (data, WriteLocation::Memory(address))
+                let (data, write_location) = if let AddressingModeData::Address(address) = addressing_mode_data  {
+                    (self.memory.read_byte(address), WriteLocation::Memory(address))
                 } else {
                     (self.a, WriteLocation::Accumulator)
                 };
-                self.ror(data, wl);
+                self.ror(data, write_location);
             },
             Opcode::RTI => self.rti(),
             Opcode::RTS => self.rts(),
-            Opcode::SBC => self.sbc(data),
+            Opcode::SBC => self.sbc(self.get_data(addressing_mode_data)),
             Opcode::SEC => self.sec(),
             Opcode::SED => self.sed(),
             Opcode::SEI => self.sei(),
-            Opcode::STA => self.sta(address.expect("Address should have been supplied for a STA!")),
-            Opcode::STX => self.stx(address.expect("Address should have been supplied for a STX!")),
-            Opcode::STY => self.sty(address.expect("Address should have been supplied for a STY!")),
+            Opcode::STA => self.sta(addressing_mode_data.as_address().expect("Address should have been supplied for a STA!")),
+            Opcode::STX => self.stx(addressing_mode_data.as_address().expect("Address should have been supplied for a STX!")),
+            Opcode::STY => self.sty(addressing_mode_data.as_address().expect("Address should have been supplied for a STY!")),
             Opcode::TAX => self.tax(),
             Opcode::TAY => self.tay(),
             Opcode::TSX => self.tsx(),

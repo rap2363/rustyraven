@@ -74,10 +74,6 @@ fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
     }
     cpu.bus.borrow_mut().ppu().write_chr_rom_data(&nes_rom.chr_rom_data);
 
-    println!("NMI Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFA));
-    println!("RES Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFC));
-    println!("IRQ Address: 0x{:4X}", cpu.memory.read_two_bytes(0xFFFE));
-
     // Read from a RESET interrupt
     cpu.pc = cpu.memory.read_two_bytes(0xFFFC);
     cpu.cycle_count = 7;
@@ -132,7 +128,7 @@ fn main_nes_loop(cpu: &mut cpu::Cpu) -> Option<ColorImage> {
     if let Some(pixels) = cpu.bus.borrow_mut().ppu().get_image() {
         // TODO: We should do this on a fixed interval runtime but threading in tokio is going
         // to be a hassle..
-        std::thread::sleep(std::time::Duration::from_millis(11));
+        std::thread::sleep(std::time::Duration::from_millis(9));
 
         let mut color_image_pixels = Vec::with_capacity(256 * 240);
         // Otherwise we'll convert our RGB pixels.
