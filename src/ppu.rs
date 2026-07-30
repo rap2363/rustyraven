@@ -489,8 +489,13 @@ impl Ppu {
         self.vblank
     }
 
-    pub fn nmi(&self) -> bool {
-        self.nmi
+    pub fn nmi(&mut self) -> bool {
+        if self.nmi && self.vblank {
+            self.vblank = false;
+            true
+        } else {
+            false
+        }
     }
 
     fn rendering_enabled(&self) -> bool {
