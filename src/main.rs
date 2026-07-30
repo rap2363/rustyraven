@@ -17,7 +17,7 @@ const H: usize = 240;
 
 use eframe::egui;
 use egui::{ColorImage};
-use std::sync::mpsc;
+use std::{sync::mpsc, thread::sleep, time::Instant};
 
 struct Emulation {
     texture: Option<egui::TextureHandle>,
@@ -82,6 +82,8 @@ fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
     const STANDARD_CYCLE_SLEEP: std::time::Duration = std::time::Duration::from_millis(9);
 
     let mut sleep_duration = STANDARD_CYCLE_SLEEP;
+    let mut now = std::time::Instant::now();
+    let mut num_frames = 0;
 
     loop {
         for (key, controller_button) in vec![
@@ -111,8 +113,16 @@ fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
             sleep_duration = STANDARD_CYCLE_SLEEP;
         }
 
-        if let Some(image) = main_nes_loop(&mut cpu, sleep_duration) && tx.send(image).is_err() {
-            return; // window closed, receiver dropped
+        if let Some(image) = main_nes_loop(&mut cpu, sleep_duration) {
+            if tx.send(image).is_err() {
+                return; // window closed.
+            }
+            num_frames += 1;
+            let seconds_per_frame = now.elapsed().as_micros() as f64;
+            if num_frames % 100 == 0 {
+                println!("FPS: {}", 1_000_000.0 / seconds_per_frame);
+            }
+            now = std::time::Instant::now();
         }
 
         ctx.request_repaint(); // wake the UI so it actually draws the new frame
@@ -140,7 +150,7 @@ fn main_nes_loop(cpu: &mut cpu::Cpu, sleep_duration: std::time::Duration) -> Opt
     if let Some(pixels) = cpu.bus.borrow_mut().ppu().get_image() {
         // TODO: We should do this on a fixed interval runtime but threading in tokio is going
         // to be a hassle..
-        std::thread::sleep(sleep_duration);
+        // std::thread::sleep(sleep_duration);
 
         let mut color_image_pixels = Vec::with_capacity(256 * 240);
         // Otherwise we'll convert our RGB pixels.
