@@ -302,7 +302,7 @@ impl DoubleBuffer {
     }
 
     fn swap(&mut self) {
-        self.front = self.back.clone();
+        std::mem::swap(&mut self.front, &mut self.back);
         self.back.clear();
         self.ready.set(true);
     }

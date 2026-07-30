@@ -62,7 +62,7 @@ impl eframe::App for Emulation {
 // TODO (replace this with whatever)
 fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
     // Initializing Code for CPU
-    let nes_rom = rom::NesRom::from_file_path("src/resources/donkey_kong.nes").expect("File not found!");
+    let nes_rom = rom::NesRom::from_file_path("src/resources/smb.nes").expect("File not found!");
 
     let mut cpu = cpu::Cpu::initialize();
     // TODO: This is all fine for no mapper, but will break otherwise.
@@ -150,7 +150,7 @@ fn main_nes_loop(cpu: &mut cpu::Cpu, sleep_duration: std::time::Duration) -> Opt
     if let Some(pixels) = cpu.bus.borrow_mut().ppu().get_image() {
         // TODO: We should do this on a fixed interval runtime but threading in tokio is going
         // to be a hassle..
-        // std::thread::sleep(sleep_duration);
+        std::thread::sleep(sleep_duration);
 
         let mut color_image_pixels = Vec::with_capacity(256 * 240);
         // Otherwise we'll convert our RGB pixels.
