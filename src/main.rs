@@ -62,9 +62,9 @@ impl eframe::App for Emulation {
 // TODO (replace this with whatever)
 fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
     // Initializing Code for CPU
-    let nes_rom = rom::NesRom::from_file_path("src/resources/smb.nes").expect("File not found!");
+    let nes_rom = rom::NesRom::from_file_path("src/resources/galaga.nes").expect("File not found!");
 
-    let mut cpu = cpu::Cpu::initialize();
+    let mut cpu = cpu::Cpu::initialize(nes_rom.name_table_arrangement);
     // TODO: This is all fine for no mapper, but will break otherwise.
     // Load the prg_rom data into main memory starting at 0x8000-0xFFFF
     cpu.memory.write_bytes(0x8000, &nes_rom.prg_rom_data);

@@ -1,5 +1,6 @@
 use crate::memory::Segment;
 use crate::ppu_registers::{PpuControl, PpuMask, VramIncrement};
+use crate::rom::NametableArrangement;
 use std::cell::Cell;
 
 const PRERENDER_SCANLINE: usize = 261;
@@ -11,6 +12,8 @@ const SPRITE_PALETTE_RAM: u16 = 0x3F10;
 // Address space from 0x0000 --> 0xFFFF, but
 // with mirrors from 0x4000 onward.
 struct PpuMemory {
+    // Determines how mirroring works (i.e. horizontal, single, or vertical mirroring)
+    mirroring: NametableArrangement,
     // 0x0000 --> 0x1FFF
     pattern_tables: Segment<0x2000>,
     // 0x2000 --> 0x2FFF (with mirrors up to 0x3EFF)
@@ -110,8 +113,9 @@ fn get_system_color(color_index: u8) -> Pixel {
 }
 
 impl PpuMemory {
-     pub fn initialize() -> Self {
+     pub fn initialize(mirroring: NametableArrangement) -> Self {
         Self {
+            mirroring: mirroring,
             pattern_tables: Segment::<0x2000>::initialize(),
             name_tables: Segment::<0x1000>::initialize(),
             palettes: Segment::<0x0040>::initialize(),
@@ -127,8 +131,21 @@ impl PpuMemory {
             self.pattern_tables.write_byte(address as usize, value);
         } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
-            let name_table_byte = (address - 0x2000) % 0x1000;
-            self.name_tables.write_byte(name_table_byte as usize, value);
+            // Now we mirror according to our current arrangement.
+            let mirroring_mask = match self.mirroring {
+                // A: [0x2000, 0x23FF]
+                // A: [0x2400, 0x27FF] (mirrored)
+                // B: [0x2800, 0x2BFF]
+                // B: [0x2C00, 0x2FFF] (mirrored)
+                NametableArrangement::HorizontallyMirrored => 0xFBFF,
+                // A: [0x2000, 0x23FF]
+                // B: [0x2400, 0x27FF]
+                // A: [0x2800, 0x2BFF] (mirrored)
+                // B: [0x2C00, 0x2FFF] (mirrored)
+                NametableArrangement::VerticallyMirrored => 0xF7FF,
+            };
+            let name_table_address = ((address - 0x2000) % 0x1000) & mirroring_mask;
+            self.name_tables.write_byte(name_table_address as usize, value);
         } else {
             // Palette Memory
             let mut palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
@@ -153,8 +170,21 @@ impl PpuMemory {
             self.pattern_tables.read_byte(address as usize)
         } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
-            let name_table_byte = (address - 0x2000) % 0x1000;
-            self.name_tables.read_byte(name_table_byte as usize)
+            // Now we mirror according to our current arrangement.
+            let mirroring_mask = match self.mirroring {
+                // A: [0x2000, 0x23FF]
+                // A: [0x2400, 0x27FF] (mirrored)
+                // B: [0x2800, 0x2BFF]
+                // B: [0x2C00, 0x2FFF] (mirrored)
+                NametableArrangement::HorizontallyMirrored => 0xFBFF,
+                // A: [0x2000, 0x23FF]
+                // B: [0x2400, 0x27FF]
+                // A: [0x2800, 0x2BFF] (mirrored)
+                // B: [0x2C00, 0x2FFF] (mirrored)
+                NametableArrangement::VerticallyMirrored => 0xF7FF,
+            };
+            let name_table_address = ((address - 0x2000) % 0x1000) & mirroring_mask;
+            self.name_tables.read_byte(name_table_address as usize)
         } else {
             // Palette Memory
             let palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
@@ -395,7 +425,7 @@ enum WriteToggle {
 }
 
 impl Ppu {
-    pub fn initialize() -> Self {
+    pub fn initialize(mirroring: NametableArrangement) -> Self {
         let mut frame_operations: Vec<[Vec<CycleOperation>; NUM_DOTS]> = (0..NUM_SCANLINES).map(|_| std::array::from_fn(|_| Vec::new())).collect();
         // Frame diagram: https://www.nesdev.org/w/images/default/4/4f/Ppu.svg
         // Visible lines + Prerender line.
@@ -453,7 +483,7 @@ impl Ppu {
         }
 
         Self {
-            memory: PpuMemory::initialize(),
+            memory: PpuMemory::initialize(mirroring),
             control: PpuControl::from(0x00),
             mask: PpuMask::from(0x00),
             oam_address: 0x00,

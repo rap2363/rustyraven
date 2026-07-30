@@ -4,6 +4,7 @@ use crate::controller::Controller;
 use crate::memory::CpuMemory;
 use crate::ppu::Ppu;
 use crate::processor_status::ProcessorStatus;
+use crate::rom::NametableArrangement;
 use std::rc::Rc;
 use std::cell::RefCell;
 
@@ -135,8 +136,8 @@ impl FetchInstructionResult {
 }
 
 impl Cpu {
-    pub fn initialize() -> Self {
-        let bus = Rc::new(RefCell::new(Bus::from(Ppu::initialize(), Controller::initialize())));
+    pub fn initialize(mirroring: NametableArrangement) -> Self {
+        let bus = Rc::new(RefCell::new(Bus::from(Ppu::initialize(mirroring), Controller::initialize())));
         Self {
             memory: CpuMemory::initialize(bus.clone()),
             bus: bus,
