@@ -51,12 +51,12 @@ impl NesRom {
         let chr_rom_size = 8192 * (nes_rom_data[5] as usize); // 8 kb units
         let flags_six = nes_rom_data[6];
         let flags_seven = nes_rom_data[7];
-        let name_table_arrangement = if (flags_six & 0x01) == 0x01 {
+        let name_table_arrangement = if (flags_six & 0x01) == 0x00 {
             NametableArrangement::HorizontallyMirrored
         } else {
             NametableArrangement::VerticallyMirrored
         };
-        let alternative_name_table_arrangement = if ((flags_six >> 3) & 0x01) == 0x01 {
+        let alternative_name_table_arrangement = if ((flags_six >> 3) & 0x01) == 0x00 {
             NametableArrangement::HorizontallyMirrored
         } else {
             NametableArrangement::VerticallyMirrored

@@ -1,5 +1,6 @@
 use crate::memory::Segment;
 use crate::ppu_registers::{PpuControl, PpuMask, VramIncrement};
+use crate::rom::NametableArrangement;
 use std::cell::Cell;
 
 const PRERENDER_SCANLINE: usize = 261;
@@ -11,6 +12,8 @@ const SPRITE_PALETTE_RAM: u16 = 0x3F10;
 // Address space from 0x0000 --> 0xFFFF, but
 // with mirrors from 0x4000 onward.
 struct PpuMemory {
+    // Determines how mirroring works (i.e. horizontal, single, or vertical mirroring)
+    mirroring: NametableArrangement,
     // 0x0000 --> 0x1FFF
     pattern_tables: Segment<0x2000>,
     // 0x2000 --> 0x2FFF (with mirrors up to 0x3EFF)
@@ -22,7 +25,7 @@ struct PpuMemory {
 }
 
 // Red-Green-Blue
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Pixel(pub u8, pub u8, pub u8);
 
 #[derive(Copy, Clone)]
@@ -110,8 +113,9 @@ fn get_system_color(color_index: u8) -> Pixel {
 }
 
 impl PpuMemory {
-     pub fn initialize() -> Self {
+     pub fn initialize(mirroring: NametableArrangement) -> Self {
         Self {
+            mirroring: mirroring,
             pattern_tables: Segment::<0x2000>::initialize(),
             name_tables: Segment::<0x1000>::initialize(),
             palettes: Segment::<0x0040>::initialize(),
@@ -127,8 +131,21 @@ impl PpuMemory {
             self.pattern_tables.write_byte(address as usize, value);
         } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
-            let name_table_byte = (address - 0x2000) % 0x1000;
-            self.name_tables.write_byte(name_table_byte as usize, value);
+            // Now we mirror according to our current arrangement.
+            let mirroring_mask = match self.mirroring {
+                // A: [0x2000, 0x23FF]
+                // A: [0x2400, 0x27FF] (mirrored)
+                // B: [0x2800, 0x2BFF]
+                // B: [0x2C00, 0x2FFF] (mirrored)
+                NametableArrangement::HorizontallyMirrored => 0xFBFF,
+                // A: [0x2000, 0x23FF]
+                // B: [0x2400, 0x27FF]
+                // A: [0x2800, 0x2BFF] (mirrored)
+                // B: [0x2C00, 0x2FFF] (mirrored)
+                NametableArrangement::VerticallyMirrored => 0xF7FF,
+            };
+            let name_table_address = ((address - 0x2000) % 0x1000) & mirroring_mask;
+            self.name_tables.write_byte(name_table_address as usize, value);
         } else {
             // Palette Memory
             let mut palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
@@ -153,8 +170,21 @@ impl PpuMemory {
             self.pattern_tables.read_byte(address as usize)
         } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
-            let name_table_byte = (address - 0x2000) % 0x1000;
-            self.name_tables.read_byte(name_table_byte as usize)
+            // Now we mirror according to our current arrangement.
+            let mirroring_mask = match self.mirroring {
+                // A: [0x2000, 0x23FF]
+                // A: [0x2400, 0x27FF] (mirrored)
+                // B: [0x2800, 0x2BFF]
+                // B: [0x2C00, 0x2FFF] (mirrored)
+                NametableArrangement::HorizontallyMirrored => 0xFBFF,
+                // A: [0x2000, 0x23FF]
+                // B: [0x2400, 0x27FF]
+                // A: [0x2800, 0x2BFF] (mirrored)
+                // B: [0x2C00, 0x2FFF] (mirrored)
+                NametableArrangement::VerticallyMirrored => 0xF7FF,
+            };
+            let name_table_address = ((address - 0x2000) % 0x1000) & mirroring_mask;
+            self.name_tables.read_byte(name_table_address as usize)
         } else {
             // Palette Memory
             let palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
@@ -302,7 +332,7 @@ impl DoubleBuffer {
     }
 
     fn swap(&mut self) {
-        self.front = self.back.clone();
+        std::mem::swap(&mut self.front, &mut self.back);
         self.back.clear();
         self.ready.set(true);
     }
@@ -395,7 +425,7 @@ enum WriteToggle {
 }
 
 impl Ppu {
-    pub fn initialize() -> Self {
+    pub fn initialize(mirroring: NametableArrangement) -> Self {
         let mut frame_operations: Vec<[Vec<CycleOperation>; NUM_DOTS]> = (0..NUM_SCANLINES).map(|_| std::array::from_fn(|_| Vec::new())).collect();
         // Frame diagram: https://www.nesdev.org/w/images/default/4/4f/Ppu.svg
         // Visible lines + Prerender line.
@@ -453,7 +483,7 @@ impl Ppu {
         }
 
         Self {
-            memory: PpuMemory::initialize(),
+            memory: PpuMemory::initialize(mirroring),
             control: PpuControl::from(0x00),
             mask: PpuMask::from(0x00),
             oam_address: 0x00,
@@ -792,7 +822,7 @@ impl Ppu {
                 // Incrementing the horizontal VRAM address means building a pixel line and rendering!
                 if self.frame_index.0 < 240 && self.frame_index.1 < 257 {
                     // Get a background pixel line from the high and low bytes of the background
-                    let mut bg_pixel_line = Vec::with_capacity(8);
+                    let mut bg_pixel_line = [(0x00, Pixel::default()); 8];
                     for i in 0..8 {
                         let shift: u8 = 15 - self.fine_x - i;
                         let hi = self.pattern_byte_sr_hi.bit(shift);
@@ -811,25 +841,25 @@ impl Ppu {
                         // Color index is a 6-bit index into system colors.
                         if value == 0x00 {
                             let transparent_index = self.memory.read_byte(BG_PALETTE_RAM);
-                            bg_pixel_line.push((value, get_system_color(transparent_index)))
+                            bg_pixel_line[i as usize] = (value, get_system_color(transparent_index));
                         } else {
                             // Color index is a 6-bit index into system colors.
                             let color_index = (self.memory.read_byte(BG_PALETTE_RAM | ((palette as u16) << 2) | (value as u16))) & 0x3F;
-                            bg_pixel_line.push((value, get_system_color(color_index)));
+                            bg_pixel_line[i as usize] = (value, get_system_color(color_index));
                         }
                     }
 
                     // Get a sprite pixel line as well.
-                    let mut sprite_pixel_line = Vec::with_capacity(8);
+                    let mut sprite_pixel_line = [None; 8];
                     for i in 0..8 {
-                        sprite_pixel_line.push(self.line_sprite_pixels[self.frame_index.1 - (8 - i)]);
+                        sprite_pixel_line[i] =self.line_sprite_pixels[self.frame_index.1 - (8 - i)];
                     }
 
                     // Now combine the pixels into a single pixel_line to push.
-                    let mut pixel_line = Vec::with_capacity(8);
+                    let mut pixel_line = [Pixel::default(); 8];
                     for i in 0..8 {
                         let (bg_value, bg_color) = bg_pixel_line[i];
-                        pixel_line.push(match sprite_pixel_line[i] {
+                        pixel_line[i] = match sprite_pixel_line[i] {
                             Some(SpritePixel(sp_color, SpritePriority::InFrontOfBackground, is_sprite_zero)) => {
                                 if is_sprite_zero {
                                     self.sprite_zero_hit = true;
@@ -847,7 +877,7 @@ impl Ppu {
                                 }
                             },
                             _ => bg_color,
-                        });
+                        };
                     }
 
                     self.image_buffer.back().extend(pixel_line);

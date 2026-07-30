@@ -17,7 +17,7 @@ const H: usize = 240;
 
 use eframe::egui;
 use egui::{ColorImage};
-use std::sync::mpsc;
+use std::{sync::mpsc, thread::sleep, time::Instant};
 
 struct Emulation {
     texture: Option<egui::TextureHandle>,
@@ -62,9 +62,9 @@ impl eframe::App for Emulation {
 // TODO (replace this with whatever)
 fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
     // Initializing Code for CPU
-    let nes_rom = rom::NesRom::from_file_path("src/resources/donkey_kong.nes").expect("File not found!");
+    let nes_rom = rom::NesRom::from_file_path("src/resources/galaga.nes").expect("File not found!");
 
-    let mut cpu = cpu::Cpu::initialize();
+    let mut cpu = cpu::Cpu::initialize(nes_rom.name_table_arrangement);
     // TODO: This is all fine for no mapper, but will break otherwise.
     // Load the prg_rom data into main memory starting at 0x8000-0xFFFF
     cpu.memory.write_bytes(0x8000, &nes_rom.prg_rom_data);
@@ -82,6 +82,8 @@ fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
     const STANDARD_CYCLE_SLEEP: std::time::Duration = std::time::Duration::from_millis(9);
 
     let mut sleep_duration = STANDARD_CYCLE_SLEEP;
+    let mut now = std::time::Instant::now();
+    let mut num_frames = 0;
 
     loop {
         for (key, controller_button) in vec![
@@ -111,8 +113,16 @@ fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
             sleep_duration = STANDARD_CYCLE_SLEEP;
         }
 
-        if let Some(image) = main_nes_loop(&mut cpu, sleep_duration) && tx.send(image).is_err() {
-            return; // window closed, receiver dropped
+        if let Some(image) = main_nes_loop(&mut cpu, sleep_duration) {
+            if tx.send(image).is_err() {
+                return; // window closed.
+            }
+            num_frames += 1;
+            let seconds_per_frame = now.elapsed().as_micros() as f64;
+            if num_frames % 100 == 0 {
+                println!("FPS: {}", 1_000_000.0 / seconds_per_frame);
+            }
+            now = std::time::Instant::now();
         }
 
         ctx.request_repaint(); // wake the UI so it actually draws the new frame
