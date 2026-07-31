@@ -8,7 +8,7 @@ mod processor_status;
 mod rom;
 
 const DMA_CPU_CYCLE_COUNT: i32 = 512;
-const NUM_FRAME_CYCLES: usize = 89001; // 261 * 341
+const NUM_FRAME_CYCLES: usize = 89_342; // 262 * 341
 
 // Rendering code, consider moving
 // TODO: Move this code once you confirm it's WAI
@@ -62,7 +62,7 @@ impl eframe::App for Emulation {
 // TODO (replace this with whatever)
 fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
     // Initializing Code for CPU
-    let nes_rom = rom::NesRom::from_file_path("src/resources/galaga.nes").expect("File not found!");
+    let nes_rom = rom::NesRom::from_file_path("src/resources/smb.nes").expect("File not found!");
 
     let mut cpu = cpu::Cpu::initialize(nes_rom.name_table_arrangement);
     // TODO: This is all fine for no mapper, but will break otherwise.
@@ -140,6 +140,8 @@ fn main_nes_loop(cpu: &mut cpu::Cpu, sleep_duration: std::time::Duration) -> Opt
     // Check for an NMI and set the interrupt.
     if cpu.bus.borrow_mut().ppu().nmi() {
         cpu.set_nmi();
+    } else {
+        cpu.clear_nmi_latch();
     }
 
     // Check for a DMA and stall the cpu for a number of cycles if it did.

@@ -111,6 +111,7 @@ pub struct Cpu {
     pub cycle_budget: i32, // when cycle_budget >= 0, we're allowed to execute cycles.
     nmi: Nmi, // Starts at 7 and decrements down to 0 with our normal cycle count. When this
               // happens we trigger an interrupt!
+    nmi_latch: bool,
 }
 
 enum Cycles {
@@ -150,6 +151,7 @@ impl Cpu {
             cycle_count: 0,
             cycle_budget: 0,
             nmi: Nmi::None,
+            nmi_latch: false,
         }
     }
 
@@ -158,9 +160,19 @@ impl Cpu {
     }
 
     pub fn set_nmi(&mut self) {
+        if self.nmi_latch {
+            return;
+        }
+
         if let Nmi::None = self.nmi {
             self.nmi = Nmi::CycleLatency(7); // Interrupt latency with 7 cycles.
         }
+
+        self.nmi_latch = true;
+    }
+
+    pub fn clear_nmi_latch(&mut self) {
+        self.nmi_latch = false;
     }
 
     fn dec_nmi(&mut self, cycles: u8) {
@@ -1209,12 +1221,13 @@ impl Cpu {
         if self.cycle_budget < 0 {
             return false;
         } 
+        // Check if we have an interrupt (NMI) enabled.
+        self.handle_nmi_interrupt();
 
         let num_cycles = self.fetch_instruction_and_execute() as i32;
         self.dec_nmi(num_cycles as u8);
         self.cycle_budget -= num_cycles;
-        // Check if we have an interrupt (NMI) enabled.
-        self.handle_nmi_interrupt();
+
         true
     }
 
