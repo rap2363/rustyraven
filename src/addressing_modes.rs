@@ -23,7 +23,7 @@ pub enum PageBoundaryResult {
     PageBoundaryCrossed,
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum AddressingModeData {
     Implied,
     Data(u8), // The actual data (used for implied or immediate modes)
@@ -119,150 +119,135 @@ impl AddressingMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{addressing_modes, rom::NametableArrangement::VerticallyMirrored};
 
     #[test]
     fn test_implied() {
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::Implied.into_data(&Cpu::initialize());
-        assert_eq!(0x00, data);
-        assert_eq!(None, address);
+        let (addressing_mode, page_boundary_result) = AddressingMode::Implied.into_data(&Cpu::initialize(VerticallyMirrored));
+        assert_eq!(addressing_mode, AddressingModeData::Implied);
         assert_eq!(PageBoundaryResult::Irrelevant, page_boundary_result);
     }
 
     #[test]
     fn test_immediate() {
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::Immediate(0x42).into_data(&Cpu::initialize());
+        let (AddressingModeData::Data(data), page_boundary_result) = AddressingMode::Immediate(0x42).into_data(&Cpu::initialize(VerticallyMirrored)) else { panic!() };
         assert_eq!(0x42, data);
-        assert_eq!(None, address);
         assert_eq!(PageBoundaryResult::Irrelevant, page_boundary_result);
     }
 
     #[test]
     fn test_absolute() {
-        let mut cpu = Cpu::initialize();
+        let mut cpu = Cpu::initialize(VerticallyMirrored);
         cpu.memory.write_byte(0x1234, 0x42);
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::Absolute(0x1234).into_data(&cpu);
-        assert_eq!(0x42, data);
-        assert_eq!(Some(0x1234), address);
+        let (AddressingModeData::Address(address), page_boundary_result) = AddressingMode::Absolute(0x1234).into_data(&cpu) else { panic!() };
+        assert_eq!(0x1234, address);
         assert_eq!(PageBoundaryResult::Irrelevant, page_boundary_result);
     }
 
     #[test]
     fn test_zero_page() {
-        let mut cpu = Cpu::initialize();
+        let mut cpu = Cpu::initialize(VerticallyMirrored);
         cpu.memory.write_byte(0x0034, 0x42);
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::ZeroPage(0x34).into_data(&cpu);
-        assert_eq!(0x42, data);
-        assert_eq!(Some(0x0034), address);
+        let (AddressingModeData::Address(address), page_boundary_result) = AddressingMode::ZeroPage(0x34).into_data(&cpu) else { panic!() };
+        assert_eq!(0x0034, address);
         assert_eq!(PageBoundaryResult::Irrelevant, page_boundary_result);
     }
 
     #[test]
     fn test_indexed_x() {
-        let mut cpu = Cpu::initialize();
+        let mut cpu = Cpu::initialize(VerticallyMirrored);
         cpu.x = 0x34;
         cpu.memory.write_byte(0x1234, 0x42);
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::IndexedX(0x1200).into_data(&cpu);
-        assert_eq!(0x42, data);
-        assert_eq!(Some(0x1234), address);
+        let (AddressingModeData::Address(address), page_boundary_result) = AddressingMode::IndexedX(0x1200).into_data(&cpu) else { panic!() };
+        assert_eq!(0x1234, address);
         assert_eq!(PageBoundaryResult::SamePage, page_boundary_result);
 
         cpu.memory.write_byte(0x1333, 0x43);
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::IndexedX(0x12FF).into_data(&cpu);
-        assert_eq!(0x43, data);
-        assert_eq!(Some(0x1333), address);
+        let (AddressingModeData::Address(address), page_boundary_result) = AddressingMode::IndexedX(0x12FF).into_data(&cpu) else { panic!() };
+        assert_eq!(0x1333, address);
         assert_eq!(PageBoundaryResult::PageBoundaryCrossed, page_boundary_result);
     }
 
     #[test]
     fn test_indexed_y() {
-        let mut cpu = Cpu::initialize();
+        let mut cpu = Cpu::initialize(VerticallyMirrored);
         cpu.y = 0x34;
         cpu.memory.write_byte(0x1234, 0x42);
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::IndexedY(0x1200).into_data(&cpu);
-        assert_eq!(0x42, data);
-        assert_eq!(Some(0x1234), address);
+        let (AddressingModeData::Address(address), page_boundary_result) = AddressingMode::IndexedY(0x1200).into_data(&cpu) else { panic!() };
+        assert_eq!(0x1234, address);
         assert_eq!(PageBoundaryResult::SamePage, page_boundary_result);
 
         cpu.memory.write_byte(0x1333, 0x43);
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::IndexedY(0x12FF).into_data(&cpu);
-        assert_eq!(0x43, data);
-        assert_eq!(Some(0x1333), address);
+        let (AddressingModeData::Address(address), page_boundary_result) = AddressingMode::IndexedY(0x12FF).into_data(&cpu) else { panic!() };
+        assert_eq!(0x1333, address);
         assert_eq!(PageBoundaryResult::PageBoundaryCrossed, page_boundary_result);
     }
 
     #[test]
     fn test_indexed_zero_page_x() {
-        let mut cpu = Cpu::initialize();
+        let mut cpu = Cpu::initialize(VerticallyMirrored);
         cpu.x = 0x35;
         cpu.memory.write_byte(0x0034, 0x42);
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::IndexedZeroPageX(0xFF).into_data(&cpu);
-        assert_eq!(0x42, data);
-        assert_eq!(Some(0x0034), address);
+        let (AddressingModeData::Address(address), page_boundary_result) = AddressingMode::IndexedZeroPageX(0xFF).into_data(&cpu) else { panic!() };
+        assert_eq!(0x0034, address);
         assert_eq!(PageBoundaryResult::Irrelevant, page_boundary_result);
     }
 
     #[test]
     fn test_indexed_zero_page_y() {
-        let mut cpu = Cpu::initialize();
+        let mut cpu = Cpu::initialize(VerticallyMirrored);
         cpu.y = 0x35;
         cpu.memory.write_byte(0x0034, 0x42);
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::IndexedZeroPageY(0xFF).into_data(&cpu);
-        assert_eq!(0x42, data);
-        assert_eq!(Some(0x0034), address);
+        let (AddressingModeData::Address(address), page_boundary_result) = AddressingMode::IndexedZeroPageY(0xFF).into_data(&cpu) else { panic!() };
+        assert_eq!(0x0034, address);
         assert_eq!(PageBoundaryResult::Irrelevant, page_boundary_result);
     }
 
     #[test]
     fn test_indirect() {
-        let mut cpu = Cpu::initialize();
+        let mut cpu = Cpu::initialize(VerticallyMirrored);
         cpu.memory.write_byte(0xFFFF, 0x42);
-        cpu.memory.write_byte(0x0000, 0x43);
-        cpu.memory.write_byte(0x4342, 0x42);
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::Indirect(0xFFFF).into_data(&cpu);
-        assert_eq!(0x42, data);
-        assert_eq!(Some(0x4342), address);
+        cpu.memory.write_byte(0xFF00, 0x43);
+        let (AddressingModeData::Address(address), page_boundary_result) = AddressingMode::Indirect(0xFFFF).into_data(&cpu) else { panic!() };
+        assert_eq!(0x4342, address);
         assert_eq!(PageBoundaryResult::Irrelevant, page_boundary_result);
     }
 
     #[test]
     fn test_indirect_zero_page_x() {
-        let mut cpu = Cpu::initialize();
+        let mut cpu = Cpu::initialize(VerticallyMirrored);
         cpu.x = 0x0F;
         cpu.memory.write_byte(0x00FF, 0x42);
         cpu.memory.write_byte(0x0000, 0x43);
         cpu.memory.write_byte(0x4342, 0x42);
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::IndirectZeroPageX(0xF0).into_data(&cpu);
-        assert_eq!(0x42, data);
-        assert_eq!(Some(0x4342), address);
+        let (AddressingModeData::Address(address), page_boundary_result) = AddressingMode::IndirectZeroPageX(0xF0).into_data(&cpu) else { panic!() };
+        assert_eq!(0x4342, address);
         assert_eq!(PageBoundaryResult::Irrelevant, page_boundary_result);
     }
 
     #[test]
     fn test_indirect_zero_page_y() {
-        let mut cpu = Cpu::initialize();
+        let mut cpu = Cpu::initialize(VerticallyMirrored);
         cpu.y = 0xCF;
         cpu.memory.write_byte(0x00FF, 0x40);
         cpu.memory.write_byte(0x0000, 0x43);
         cpu.memory.write_byte(0x440F, 0x42);
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::IndirectZeroPageY(0xFF).into_data(&cpu);
-        assert_eq!(0x42, data);
-        assert_eq!(Some(0x440F), address);
+        let (AddressingModeData::Address(address), page_boundary_result) = AddressingMode::IndirectZeroPageY(0xFF).into_data(&cpu) else { panic!() };
+        assert_eq!(0x440F, address);
         assert_eq!(PageBoundaryResult::PageBoundaryCrossed, page_boundary_result);
     }
 
 
     #[test]
     fn test_relative() {
-        let mut cpu = Cpu::initialize();
+        let mut cpu = Cpu::initialize(VerticallyMirrored);
         cpu.pc = 0x1234;
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::Relative(0x22).into_data(&cpu);
+        let (AddressingModeData::Data(data), page_boundary_result) = AddressingMode::Relative(0x22).into_data(&cpu) else { panic!() };
         assert_eq!(0x22, data);
-        assert_eq!(Some(0x1256), address);
         assert_eq!(PageBoundaryResult::SamePage, page_boundary_result);
 
-        let AddressingModeData { data, address, page_boundary_result } = AddressingMode::Relative(0xFE).into_data(&cpu);
+        let (AddressingModeData::Data(data), page_boundary_result) = AddressingMode::Relative(0xFE).into_data(&cpu) else { panic!() };
         assert_eq!(0xFE, data);
-        assert_eq!(Some(0x1332), address);
         assert_eq!(PageBoundaryResult::PageBoundaryCrossed, page_boundary_result);
     }
 }

@@ -6,6 +6,7 @@ mod ppu;
 mod ppu_registers;
 mod processor_status;
 mod rom;
+mod mappers;
 
 const DMA_CPU_CYCLE_COUNT: i32 = 512;
 const NUM_FRAME_CYCLES: usize = 89_342; // 262 * 341
@@ -18,6 +19,8 @@ const H: usize = 240;
 use eframe::egui;
 use egui::{ColorImage};
 use std::{sync::mpsc, thread::sleep, time::Instant};
+
+use crate::mappers::mapper::get_mapper;
 
 struct Emulation {
     texture: Option<egui::TextureHandle>,
@@ -62,19 +65,8 @@ impl eframe::App for Emulation {
 // TODO (replace this with whatever)
 fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
     // Initializing Code for CPU
-    let nes_rom = rom::NesRom::from_file_path("src/resources/smb.nes").expect("File not found!");
-
-    let mut cpu = cpu::Cpu::initialize(nes_rom.name_table_arrangement);
-    // TODO: This is all fine for no mapper, but will break otherwise.
-    // Load the prg_rom data into main memory starting at 0x8000-0xFFFF
-    cpu.memory.write_bytes(0x8000, &nes_rom.prg_rom_data);
-    // NROM means we write it to the lower and upper banks.
-    if nes_rom.prg_rom_data.len() == 0x4000 {
-        // Copy it to the upper bank as well.
-        cpu.memory.write_bytes(0xC000, &nes_rom.prg_rom_data);
-    }
-    cpu.bus.borrow_mut().ppu().write_chr_rom_data(&nes_rom.chr_rom_data);
-
+    let nes_rom = rom::NesRom::from_file_path("src/resources/ducktales.nes").expect("File not found!");
+    let mut cpu = cpu::Cpu::initialize(get_mapper(&nes_rom));
     // Read from a RESET interrupt
     cpu.pc = cpu.memory.read_two_bytes(0xFFFC);
     cpu.cycle_count = 7;
