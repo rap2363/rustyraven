@@ -6,3 +6,4 @@ mod ppu;
 mod ppu_registers;
 mod processor_status;
 mod rom;
+mod mappers;

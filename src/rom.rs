@@ -1,12 +1,12 @@
 use std::{fmt, fs};
 
 #[derive(Debug)]
-pub enum Mapper {
+pub enum MapperName {
     Unknown(u8),
     Nrom,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum NametableArrangement {
     VerticallyMirrored,
     HorizontallyMirrored,
@@ -19,7 +19,7 @@ pub struct NesRom {
     pub alternative_name_table_arrangement: NametableArrangement,
     pub battery_backed_prg_ram: bool,
     pub trainer_data_present: bool,
-    pub mapper: Mapper,
+    pub mapper: MapperName,
     pub prg_rom_data: Vec<u8>,
     pub chr_rom_data: Vec<u8>,
 }
@@ -65,7 +65,7 @@ impl NesRom {
         let trainer_data_present = (flags_six >> 2) & 0x01 == 0x01;
         let mapper_value = (flags_seven & 0xF0) + (flags_six >> 4);
         let mapper = match mapper_value {
-            0x00 => Mapper::Nrom,
+            0x00 => MapperName::Nrom,
             x => panic!("Unknown mapper {x}!"),
         };
         let trainer_num_bytes = if trainer_data_present { 512 } else { 0 };

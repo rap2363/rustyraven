@@ -1,7 +1,9 @@
+use crate::mappers::mapper::Mapper;
 use crate::memory::Segment;
 use crate::ppu_registers::{PpuControl, PpuMask, VramIncrement};
 use crate::rom::NametableArrangement;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 const PRERENDER_SCANLINE: usize = 261;
 const NUM_SCANLINES: usize = 262;
@@ -12,10 +14,8 @@ const SPRITE_PALETTE_RAM: u16 = 0x3F10;
 // Address space from 0x0000 --> 0xFFFF, but
 // with mirrors from 0x4000 onward.
 struct PpuMemory {
-    // Determines how mirroring works (i.e. horizontal, single, or vertical mirroring)
-    mirroring: NametableArrangement,
-    // 0x0000 --> 0x1FFF
-    pattern_tables: Segment<0x2000>,
+    // Determines how we map to chr rom (the first 0x2000 bytes).
+    mapper: Rc<RefCell<dyn Mapper>>,
     // 0x2000 --> 0x2FFF (with mirrors up to 0x3EFF)
     name_tables: Segment<0x1000>,
     // 0x3F00 --> 0x3F20 (with mirrors up to 0x4000)
@@ -113,10 +113,9 @@ fn get_system_color(color_index: u8) -> Pixel {
 }
 
 impl PpuMemory {
-     pub fn initialize(mirroring: NametableArrangement) -> Self {
+     pub fn initialize(mapper: Rc<RefCell<dyn Mapper>>) -> Self {
         Self {
-            mirroring: mirroring,
-            pattern_tables: Segment::<0x2000>::initialize(),
+            mapper: mapper,
             name_tables: Segment::<0x1000>::initialize(),
             palettes: Segment::<0x0040>::initialize(),
             oam_data: Segment::<0x0100>::initialize(),
@@ -127,12 +126,12 @@ impl PpuMemory {
         // First memory map modulo 0x4000.
         let address = address % 0x4000;
         if address < 0x2000 {
-            // Pattern Tables
-            self.pattern_tables.write_byte(address as usize, value);
+            // Pattern Tables (CHR-ROM) handled by the mapper.
+            self.mapper.borrow_mut().write_chr_rom_byte(address, value);
         } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
             // Now we mirror according to our current arrangement.
-            let mirroring_mask = match self.mirroring {
+            let mirroring_mask = match self.mapper.borrow().get_nametable_arrangement() {
                 // A: [0x2000, 0x23FF]
                 // A: [0x2400, 0x27FF] (mirrored)
                 // B: [0x2800, 0x2BFF]
@@ -166,12 +165,12 @@ impl PpuMemory {
         // First memory map modulo 0x4000.
         let address = address % 0x4000;
         if address < 0x2000 {
-            // Pattern Tables
-            self.pattern_tables.read_byte(address as usize)
+            // Pattern Tables (CHR ROM) handled by the mapper.
+            self.mapper.borrow().read_chr_rom_byte(address)
         } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
             // Now we mirror according to our current arrangement.
-            let mirroring_mask = match self.mirroring {
+            let mirroring_mask = match self.mapper.borrow().get_nametable_arrangement() {
                 // A: [0x2000, 0x23FF]
                 // A: [0x2400, 0x27FF] (mirrored)
                 // B: [0x2800, 0x2BFF]
@@ -425,7 +424,7 @@ enum WriteToggle {
 }
 
 impl Ppu {
-    pub fn initialize(mirroring: NametableArrangement) -> Self {
+    pub fn initialize(mapper: Rc<RefCell<dyn Mapper>>) -> Self {
         let mut frame_operations: Vec<[Vec<CycleOperation>; NUM_DOTS]> = (0..NUM_SCANLINES).map(|_| std::array::from_fn(|_| Vec::new())).collect();
         // Frame diagram: https://www.nesdev.org/w/images/default/4/4f/Ppu.svg
         // Visible lines + Prerender line.
@@ -483,7 +482,7 @@ impl Ppu {
         }
 
         Self {
-            memory: PpuMemory::initialize(mirroring),
+            memory: PpuMemory::initialize(mapper),
             control: PpuControl::from(0x00),
             mask: PpuMask::from(0x00),
             oam_address: 0x00,
@@ -519,7 +518,7 @@ impl Ppu {
         self.vblank
     }
 
-    pub fn nmi(&mut self) -> bool {
+    pub fn nmi(&self) -> bool {
         self.nmi && self.vblank
     }
 
@@ -932,10 +931,11 @@ impl Ppu {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rom::NametableArrangement::VerticallyMirrored;
 
     #[test]
     fn test_initialize_ppu() {
-        let ppu = Ppu::initialize();
+        let ppu = Ppu::initialize(VerticallyMirrored);
         println!("{:?}", ppu.frame_operations[0]);
     }
 }

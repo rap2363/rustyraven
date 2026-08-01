@@ -1,5 +1,6 @@
 use std::rc::Rc;
 use std::cell::RefCell;
+use crate::mappers::mapper::Mapper;
 use crate::cpu::Bus;
 use crate::ppu::Ppu;
 use crate::controller::Controller;
@@ -38,15 +39,17 @@ pub struct CpuMemory {
     ram: Segment<0x0800>,
     lower_io: Segment<0x0008>,
     upper_memory: Segment<0xC000>,
+    mapper: Rc<RefCell<dyn Mapper>>,
     bus: Rc<RefCell<Bus>>,
 }
 
 impl CpuMemory {
-    pub fn initialize(bus: Rc<RefCell<Bus>>) -> Self {
+    pub fn initialize(bus: Rc<RefCell<Bus>>, mapper: Rc<RefCell<dyn Mapper>>) -> Self {
         Self {
             ram: Segment::<0x0800>::initialize(),
             lower_io: Segment::<0x0008>::initialize(),
             upper_memory: Segment::<0xC000>::initialize(),
+            mapper: mapper,
             bus: bus,
         }
     }
@@ -70,7 +73,7 @@ impl CpuMemory {
             self.lower_io.write_byte(lower_io_address as usize, value);
             // Write to the appropriate ppu listener.
             self.bus.borrow_mut().ppu().write_io_register(0x2000 + lower_io_address, value);
-        } else {
+        } else if address < 0x8000 {
             // Upper Memory
             let upper_memory_address = address - 0x4000;
             // DMA
@@ -78,15 +81,21 @@ impl CpuMemory {
                 self.bus.borrow_mut().ppu().dma(&self.get_dma_bytes(value))
             }
 
-            // Controller 1
+            // Controller Strobes
             if upper_memory_address == 0x0016 {
                 if value & 0x01 == 0x01 {
                     self.bus.borrow_mut().controller_1().strobe_high();
+                    self.bus.borrow_mut().controller_2().strobe_high();
                 } else {
                     self.bus.borrow_mut().controller_1().strobe_low();
+                    self.bus.borrow_mut().controller_2().strobe_low();
                 }
             }
+
             self.upper_memory.write_byte(upper_memory_address as usize, value);
+        } else {
+            // PRG-ROM territory, enter the mapper.
+            self.mapper.borrow_mut().write_prg_rom_byte(address, value);
         }
     }
 
@@ -118,7 +127,7 @@ impl CpuMemory {
             // Note we require a mutable reference to the PPU (this is because the read actually causes
             // some state change within the PPU potentially (e.g. the clearing of vblank)).
             self.bus.borrow_mut().ppu().read_io_register(0x2000 + lower_io_address)
-        } else {
+        } else if address < 0x8000 {
             // Upper Memory
             let upper_memory_address = address - 0x4000;
 
@@ -127,7 +136,14 @@ impl CpuMemory {
                 return self.bus.borrow_mut().controller_1().read();
             }
 
+            // Controller 2
+            if upper_memory_address == 0x0017 {
+                return self.bus.borrow_mut().controller_2().read();
+            }
+
             self.upper_memory.read_byte(upper_memory_address as usize)
+        } else {
+            self.mapper.borrow().read_prg_rom_byte(address)
         }
     }
 
@@ -173,6 +189,7 @@ impl CpuMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rom::NametableArrangement::VerticallyMirrored;
 
     #[test]
     fn test_16_byte_memory() {
@@ -184,9 +201,10 @@ mod tests {
 
     #[test]
     fn test_memory_mirroring() {
-        let ppu = Ppu::initialize();
+        let ppu = Ppu::initialize(VerticallyMirrored);
         let controller_1 = Controller::initialize();
-        let mut cpu_memory = CpuMemory::initialize(Rc::new(RefCell::new(Bus::from(ppu, controller_1))));
+        let controller_2 = Controller::initialize();
+        let mut cpu_memory = CpuMemory::initialize(Rc::new(RefCell::new(Bus::from(ppu, controller_1, controller_2))));
         cpu_memory.write_byte(0x0803, 42);
         cpu_memory.write_byte(0x2009, 43);
         // Assert that the write can be read in a "mirrored" way throughout RAM.
