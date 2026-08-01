@@ -506,7 +506,7 @@ impl Ppu {
             pattern_byte_sr_lo: ShiftRegister::initialize(),
             attribute_byte_sr: ShiftRegister::initialize(),
             image_buffer: DoubleBuffer::initialize(),
-            line_sprite_pixels: Vec::with_capacity(0x100),
+            line_sprite_pixels: vec![None; 0x100],
         }
     }
 
@@ -846,7 +846,7 @@ impl Ppu {
                     // Get a sprite pixel line as well.
                     let mut sprite_pixel_line = [None; 8];
                     for i in 0..8 {
-                        sprite_pixel_line[i] =self.line_sprite_pixels[self.frame_index.1 - (8 - i)];
+                        sprite_pixel_line[i] = self.line_sprite_pixels[self.frame_index.1 - (8 - i)];
                     }
 
                     // Now combine the pixels into a single pixel_line to push.

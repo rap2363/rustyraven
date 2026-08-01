@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::mappers::mapper_2::Mapper2;
 use crate::rom::{MapperName, NametableArrangement, NesRom};
 use crate::mappers::mapper_0::Mapper0;
 
@@ -31,6 +32,7 @@ pub trait Mapper {
 pub fn get_mapper(rom: &NesRom) -> Rc<RefCell<dyn Mapper>> {
     match rom.mapper {
         MapperName::Nrom => Rc::new(RefCell::new(Mapper0::from(rom))),
+        MapperName::Unrom => Rc::new(RefCell::new(Mapper2::from(rom))),
         _ => todo!("Unimplemented mapper {:?}", rom.mapper),
     }
 }

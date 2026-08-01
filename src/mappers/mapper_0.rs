@@ -10,11 +10,11 @@ use crate::rom::{NametableArrangement, NesRom};
 //
 // 0x8000______________
 // |                  |-----------> mapper.prg_rom_data
-// |      (4 kb)      |
+// |      (16 kb)     |
 // |                  |
 // 0xC000_____________|
 // |                  |
-// |      (4 kb)      |
+// |      (16 kb)     |
 // |                  |
 // |__________________|
 //
@@ -22,7 +22,7 @@ use crate::rom::{NametableArrangement, NesRom};
 //
 // 0x0000______________
 // |                  |-----------> mapper.chr_rom_data
-// |______(2 kb)______|
+// |______(8 kb)______|
 //
 pub struct Mapper0 {
     chr_rom_data: Segment<0x2000>,

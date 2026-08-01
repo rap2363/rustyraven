@@ -4,6 +4,7 @@ use std::{fmt, fs};
 pub enum MapperName {
     Unknown(u8),
     Nrom,
+    Unrom,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -66,6 +67,7 @@ impl NesRom {
         let mapper_value = (flags_seven & 0xF0) + (flags_six >> 4);
         let mapper = match mapper_value {
             0x00 => MapperName::Nrom,
+            0x02 => MapperName::Unrom,
             x => panic!("Unknown mapper {x}!"),
         };
         let trainer_num_bytes = if trainer_data_present { 512 } else { 0 };
