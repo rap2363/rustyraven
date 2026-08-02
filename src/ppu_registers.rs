@@ -10,8 +10,8 @@
 #[derive(Copy, Clone, Debug)]
 pub struct PpuControl(u8);
 
-#[derive(Debug, PartialEq)]
-enum SpriteSize {
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum SpriteSize {
     EightByEight,
     EightBySixteen,
 }

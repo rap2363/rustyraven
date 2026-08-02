@@ -55,6 +55,14 @@ impl Mapper0 {
 
         Self { chr_rom_data, prg_rom_data, nametable_arrangement }
     }
+
+    pub fn test_initialize() -> Self {
+        let chr_rom_data = Segment::<0x2000>::initialize();
+        let prg_rom_data = Segment::<0x8000>::initialize();
+        let nametable_arrangement = NametableArrangement::HorizontallyMirrored;
+
+        Self { chr_rom_data, prg_rom_data, nametable_arrangement }
+    }
 }
 
 impl Mapper for Mapper0 {
