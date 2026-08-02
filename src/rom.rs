@@ -5,10 +5,13 @@ pub enum MapperName {
     Unknown(u8),
     Nrom,
     Unrom,
+    Mmc1,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum NametableArrangement {
+    SingleScreenLo,
+    SingleScreenHi,
     VerticallyMirrored,
     HorizontallyMirrored,
 }
@@ -67,6 +70,7 @@ impl NesRom {
         let mapper_value = (flags_seven & 0xF0) + (flags_six >> 4);
         let mapper = match mapper_value {
             0x00 => MapperName::Nrom,
+            0x01 => MapperName::Mmc1,
             0x02 => MapperName::Unrom,
             x => panic!("Unknown mapper {x}!"),
         };

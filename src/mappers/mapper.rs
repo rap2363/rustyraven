@@ -1,9 +1,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::mappers::mapper_2::Mapper2;
 use crate::rom::{MapperName, NametableArrangement, NesRom};
 use crate::mappers::mapper_0::Mapper0;
+use crate::mappers::mapper_1::Mapper1;
+use crate::mappers::mapper_2::Mapper2;
 
 pub trait Mapper {
     // Read a byte from PRG-ROM using the correctly configured bank. This address will be a value
@@ -16,6 +17,13 @@ pub trait Mapper {
     // assumed to be in [0x0000, 0x1FFF].
     fn read_chr_rom_byte(&self, address: u16) -> u8;
 
+    // Read a byte from PRG-RAM using the currently configured configured bank. The address is
+    // assumed to be in [0x4020, 0x7FFF]. Many mappers will not implement this and so we default
+    // this implementation to return 0x00.
+    fn read_prg_ram_byte(&self, _address: u16) -> u8 {
+        0x00
+    }
+
     // Writes a byte to PRG ROM which doesn't actually write to the value in memory (because it's
     // read-only memory), but can switch banks or alter mapper state appropriately.
     fn write_prg_rom_byte(&mut self, address: u16, value: u8);
@@ -23,6 +31,9 @@ pub trait Mapper {
     // Write a byte into CHR ROM using the currently configured configured bank. The address is
     // assumed to be in [0x0000, 0x1FFF].
     fn write_chr_rom_byte(&mut self, address: u16, value: u8);
+
+    // Writes a byte to PRG RAM. Many mappers don't implement this, so we default it to a noop.
+    fn write_prg_ram_byte(&mut self, _address: u16, _value: u8) { }
 
     // Returns the current nametable arrangement. This is static for most games, but technically
     // the mapper can change this in some titles (e.g. Zelda).
@@ -32,6 +43,7 @@ pub trait Mapper {
 pub fn get_mapper(rom: &NesRom) -> Rc<RefCell<dyn Mapper>> {
     match rom.mapper {
         MapperName::Nrom => Rc::new(RefCell::new(Mapper0::from(rom))),
+        MapperName::Mmc1 => Rc::new(RefCell::new(Mapper1::from(rom))),
         MapperName::Unrom => Rc::new(RefCell::new(Mapper2::from(rom))),
         _ => todo!("Unimplemented mapper {:?}", rom.mapper),
     }

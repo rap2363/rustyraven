@@ -122,6 +122,41 @@ impl PpuMemory {
         }
     }
 
+    fn get_mirrored_nametable_address(address: u16, nt_arrangement: NametableArrangement) -> u16 {
+        let mut nametable_address = ((address - 0x2000) % 0x1000);
+        match nt_arrangement {
+            // A: [0x2000, 0x23FF]
+            // A: [0x2400, 0x27FF] (mirrored)
+            // B: [0x2800, 0x2BFF]
+            // B: [0x2C00, 0x2FFF] (mirrored)
+            NametableArrangement::HorizontallyMirrored => {
+                nametable_address &= 0xFBFF; 
+            },
+            // A: [0x2000, 0x23FF]
+            // B: [0x2400, 0x27FF]
+            // A: [0x2800, 0x2BFF] (mirrored)
+            // B: [0x2C00, 0x2FFF] (mirrored)
+            NametableArrangement::VerticallyMirrored => {
+                nametable_address &= 0xF7FF; 
+            },
+            // A: [0x2000, 0x23FF]
+            // A: [0x2400, 0x27FF] (mirrored)
+            // A: [0x2800, 0x2BFF] (mirrored)
+            // A: [0x2C00, 0x2FFF] (mirrored)
+            NametableArrangement::SingleScreenLo => {
+                nametable_address &= 0xF3FF; 
+            },
+            // B: [0x2000, 0x23FF] (mirrored)
+            // B: [0x2400, 0x27FF]
+            // B: [0x2800, 0x2BFF] (mirrored)
+            // B: [0x2C00, 0x2FFF] (mirrored)
+            NametableArrangement::SingleScreenHi => {
+                nametable_address &= 0xF0FF; 
+                nametable_address |= 0x0400; // Just set the fourth bit.
+            },
+        }
+        nametable_address
+    }
     pub fn write_byte(&mut self, address: u16, value: u8) {
         // First memory map modulo 0x4000.
         let address = address % 0x4000;
@@ -131,20 +166,11 @@ impl PpuMemory {
         } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
             // Now we mirror according to our current arrangement.
-            let mirroring_mask = match self.mapper.borrow().get_nametable_arrangement() {
-                // A: [0x2000, 0x23FF]
-                // A: [0x2400, 0x27FF] (mirrored)
-                // B: [0x2800, 0x2BFF]
-                // B: [0x2C00, 0x2FFF] (mirrored)
-                NametableArrangement::HorizontallyMirrored => 0xFBFF,
-                // A: [0x2000, 0x23FF]
-                // B: [0x2400, 0x27FF]
-                // A: [0x2800, 0x2BFF] (mirrored)
-                // B: [0x2C00, 0x2FFF] (mirrored)
-                NametableArrangement::VerticallyMirrored => 0xF7FF,
-            };
-            let name_table_address = ((address - 0x2000) % 0x1000) & mirroring_mask;
-            self.name_tables.write_byte(name_table_address as usize, value);
+            let nametable_address = Self::get_mirrored_nametable_address(
+                address, 
+                self.mapper.borrow().get_nametable_arrangement()
+            );
+            self.name_tables.write_byte(nametable_address as usize, value);
         } else {
             // Palette Memory
             let mut palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
@@ -170,20 +196,11 @@ impl PpuMemory {
         } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
             // Now we mirror according to our current arrangement.
-            let mirroring_mask = match self.mapper.borrow().get_nametable_arrangement() {
-                // A: [0x2000, 0x23FF]
-                // A: [0x2400, 0x27FF] (mirrored)
-                // B: [0x2800, 0x2BFF]
-                // B: [0x2C00, 0x2FFF] (mirrored)
-                NametableArrangement::HorizontallyMirrored => 0xFBFF,
-                // A: [0x2000, 0x23FF]
-                // B: [0x2400, 0x27FF]
-                // A: [0x2800, 0x2BFF] (mirrored)
-                // B: [0x2C00, 0x2FFF] (mirrored)
-                NametableArrangement::VerticallyMirrored => 0xF7FF,
-            };
-            let name_table_address = ((address - 0x2000) % 0x1000) & mirroring_mask;
-            self.name_tables.read_byte(name_table_address as usize)
+            let nametable_address = Self::get_mirrored_nametable_address(
+                address, 
+                self.mapper.borrow().get_nametable_arrangement()
+            );
+            self.name_tables.read_byte(nametable_address as usize)
         } else {
             // Palette Memory
             let palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
