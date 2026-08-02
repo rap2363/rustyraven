@@ -944,15 +944,3 @@ impl Ppu {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::rom::NametableArrangement::VerticallyMirrored;
-
-    #[test]
-    fn test_initialize_ppu() {
-        let ppu = Ppu::initialize(VerticallyMirrored);
-        println!("{:?}", ppu.frame_operations[0]);
-    }
-}

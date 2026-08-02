@@ -8,7 +8,7 @@ pub enum MapperName {
     Mmc1,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NametableArrangement {
     SingleScreenLo,
     SingleScreenHi,

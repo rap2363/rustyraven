@@ -116,7 +116,7 @@ use crate::rom::{NametableArrangement, NesRom};
 // 0, 1: switch 32 KB at $8000, ignoring low bit of bank number
 //    2: fix first bank at $8000 and switch 16 KB bank at $C000
 //    3: fix last bank at $C000 and switch 16 KB bank at $8000
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum PrgBankMode {
     Switch32Kb,
     FixFirstBank,
@@ -126,7 +126,7 @@ enum PrgBankMode {
 // CHR-ROM bank mode enums.
 // 0: switch 8 KB at a time
 // 1: switch two separate 4 KB banks
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum ChrBankMode {
     Switch8Kb,
     Switch4Kb,
@@ -184,7 +184,8 @@ impl ControlState {
 }
 
 pub struct Mapper1 {
-    prg_rom: Segment<0x80000>, // 512 kb
+    // prg_rom: Segment<0x80000>, // 512 kb
+    prg_rom: Segment<0x20000>, // 128 kb
     num_prg_rom_banks: usize,
     prg_ram: Segment<0x2000>, // 8 kb
     chr_rom: Segment<0x8000>, // 32 kb
@@ -193,7 +194,8 @@ pub struct Mapper1 {
 
 impl Mapper1 {
     pub fn from(rom: &NesRom) -> Self {
-        let mut prg_rom = Segment::<0x80000>::initialize();
+        // let mut prg_rom = Segment::<0x80000>::initialize();
+        let mut prg_rom = Segment::<0x20000>::initialize();
         let prg_ram = Segment::<0x2000>::initialize();
         let mut chr_rom = Segment::<0x8000>::initialize();
         let control_state = ControlState::initialize();
@@ -204,6 +206,17 @@ impl Mapper1 {
 
         // This might be zero. If it is that's actually totally fine (it's RAM).
         chr_rom.write_bytes(0x00, &rom.chr_rom_data);
+
+        Self { prg_rom, num_prg_rom_banks, prg_ram, chr_rom, control_state }
+    }
+
+    fn test_initialize() -> Self {
+        // let prg_rom = Segment::<0x80000>::initialize();
+        let prg_rom = Segment::<0x20000>::initialize();
+        let num_prg_rom_banks = 8;
+        let prg_ram = Segment::<0x2000>::initialize();
+        let chr_rom = Segment::<0x8000>::initialize();
+        let control_state = ControlState::initialize();
 
         Self { prg_rom, num_prg_rom_banks, prg_ram, chr_rom, control_state }
     }
@@ -229,7 +242,7 @@ impl Mapper1 {
             0x03 => NametableArrangement::VerticallyMirrored,
             _ => panic!("Invalid state: {}", value),
         };
-        self.control_state.prg_bank_mode = match (value >> 2) >> 0x03 {
+        self.control_state.prg_bank_mode = match (value >> 2) & 0x03 {
             0x00 | 0x01 => PrgBankMode::Switch32Kb,
             0x02 => PrgBankMode::FixFirstBank,
             0x03 => PrgBankMode::FixLastBank,
@@ -293,7 +306,7 @@ impl Mapper1 {
         let base_address = match self.control_state.prg_bank_mode {
             PrgBankMode::Switch32Kb => ((self.control_state.prg_bank & 0x06) as usize) * 0x4000,
             PrgBankMode::FixFirstBank => {
-                if address < 0x4000 {
+                if offset_address < 0x4000 {
                     // Use the first bank.
                     0x0000
                 } else {
@@ -303,7 +316,7 @@ impl Mapper1 {
                 }
             },
             PrgBankMode::FixLastBank => {
-                if address < 0x4000 {
+                if offset_address < 0x4000 {
                     // Pick the 4kb bank.
                     (self.control_state.prg_bank & 0x07) as usize * 0x4000
                 } else {
@@ -327,7 +340,7 @@ impl Mapper1 {
         let base_address = match self.control_state.chr_bank_mode {
             ChrBankMode::Switch8Kb => ((self.control_state.chr_bank_0 & 0x06) as usize) * 0x1000,
             ChrBankMode::Switch4Kb => {
-                if address < 0x1000 {
+                if offset_address < 0x1000 {
                     (self.control_state.chr_bank_0 & 0x07) as usize * 0x1000
                 } else {
                     offset_address -= 0x1000;
@@ -410,5 +423,83 @@ impl Mapper for Mapper1 {
 
     fn get_nametable_arrangement(&self) -> NametableArrangement {
         self.control_state.current_nt
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::mappers::mapper_2::Mapper2;
+    use super::*;
+
+    #[test]
+    fn test_writes_with_target() {
+        let mut mapper = Mapper1::test_initialize();
+        // We'll write the five bit value b10110
+        mapper.write_prg_rom_byte(0x8000, 0x00);
+        mapper.write_prg_rom_byte(0x8000, 0x01);
+        mapper.write_prg_rom_byte(0x8000, 0x01);
+        mapper.write_prg_rom_byte(0x8000, 0x00);
+        mapper.write_prg_rom_byte(0x8000, 0x01);
+        // Now after this final write we should have written to the 
+        // control register.
+        assert_eq!(mapper.control_state.chr_bank_mode, ChrBankMode::Switch4Kb);
+        assert_eq!(mapper.control_state.prg_bank_mode, PrgBankMode::Switch32Kb);
+        assert_eq!(mapper.control_state.current_nt, NametableArrangement::HorizontallyMirrored);
+    }
+
+    #[test]
+    fn test_get_mapped_prg_address_switch_32_kb() {
+        let mut mapper = Mapper1::test_initialize();
+        mapper.control_state.prg_bank_mode = PrgBankMode::Switch32Kb;
+        mapper.control_state.prg_bank = 0x05;
+        // Now if we have 8 4kb banks, the address should simply ignore the least
+        // significant bit and we'll return (in this case), the "3rd" 8 kb bank.
+        assert_eq!(mapper.get_mapped_prg_address(0x8042), 65602);  // 0x02 * 0x8000 + 0x0042
+        assert_eq!(mapper.get_mapped_prg_address(0xC042), 81986); // 0x02 * 0x8000 + 0x4042
+    }
+
+    #[test]
+    fn test_get_mapped_prg_address_fix_first_bank() {
+        let mut mapper = Mapper1::test_initialize();
+        mapper.control_state.prg_bank_mode = PrgBankMode::FixFirstBank;
+        mapper.control_state.prg_bank = 0x05;
+        // Now if we have 8 4kb banks, the address should simply return the fifth
+        // 4 kb bank.
+        assert_eq!(mapper.get_mapped_prg_address(0x8042), 66);    // 0x0042 (first bank!)
+        assert_eq!(mapper.get_mapped_prg_address(0xC042), 81986); // 0x05 * 0x4000 + 0x0042
+    }
+
+    #[test]
+    fn test_get_mapped_prg_address_fix_last_bank() {
+        let mut mapper = Mapper1::test_initialize();
+        mapper.control_state.prg_bank_mode = PrgBankMode::FixLastBank;
+        mapper.control_state.prg_bank = 0x05;
+        // Now if we have 8 4kb banks, the address should simply return the fifth
+        // 4 kb bank when we query within [0x8000, 0xC000]
+        assert_eq!(mapper.get_mapped_prg_address(0x8042), 81986);  // 0x05 * 0x4000 + 0x0042
+        assert_eq!(mapper.get_mapped_prg_address(0xC042), 114754); // 0x07 * 0x4000 + 0x0042 (last bank!)
+    }
+
+    #[test]
+    fn test_get_mapped_chr_rom_switch_8_kb() {
+        let mut mapper = Mapper1::test_initialize();
+        mapper.control_state.chr_bank_mode = ChrBankMode::Switch8Kb;
+        mapper.control_state.chr_bank_0 = 0x05;
+        mapper.control_state.chr_bank_1 = 0xFF;
+        // Now if we have 4 8kb banks, the address should simply ignore the least
+        // significant bit and we'll return (in this case), the "third" 8 kb bank.
+        assert_eq!(mapper.get_mapped_chr_address(0x0042), 16450);  // 2 * 0x2000 + 0x0042 (base=0x4000)
+        assert_eq!(mapper.get_mapped_chr_address(0x1042), 20546);  // 2 * 0x2000 + 0x1042 (base=0x5000)
+    }
+
+    #[test]
+    fn test_get_mapped_chr_rom_switch_4kb() {
+        let mut mapper = Mapper1::test_initialize();
+        mapper.control_state.chr_bank_mode = ChrBankMode::Switch4Kb;
+        mapper.control_state.chr_bank_0 = 0x05;
+        mapper.control_state.chr_bank_1 = 0xFF;
+        // We have 8 4 kb banks, swap between them.
+        assert_eq!(mapper.get_mapped_chr_address(0x0042), 20546);  //  0x5000 + 0x0042 (base=0x5000)
+        assert_eq!(mapper.get_mapped_chr_address(0x1042), 28738);  //  0x7000 + 0x0042 (base=0x5000)
     }
 }
