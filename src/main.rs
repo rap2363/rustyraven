@@ -18,7 +18,7 @@ const H: usize = 240;
 
 use eframe::egui;
 use egui::{ColorImage};
-use std::{sync::mpsc, thread::sleep, time::Instant};
+use std::sync::mpsc;
 
 use crate::mappers::mapper::get_mapper;
 
@@ -65,7 +65,7 @@ impl eframe::App for Emulation {
 // TODO (replace this with whatever)
 fn produce_images(tx: mpsc::Sender<egui::ColorImage>, ctx: egui::Context) {
     // Initializing Code for CPU
-    let nes_rom = rom::NesRom::from_file_path("src/resources/zelda.nes").expect("File not found!");
+    let nes_rom = rom::NesRom::from_file_path("src/resources/metroid.nes").expect("File not found!");
     let mut cpu = cpu::Cpu::initialize(get_mapper(&nes_rom));
     // Read from a RESET interrupt
     cpu.pc = cpu.memory.read_two_bytes(0xFFFC);

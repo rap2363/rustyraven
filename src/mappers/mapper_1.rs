@@ -235,7 +235,6 @@ impl Mapper1 {
     // |                         3: fix last bank at $C000 and switch 16 KB bank at $8000)
     // +----- CHR-ROM bank mode (0: switch 8 KB at a time; 1: switch two separate 4 KB banks)
     fn write_control(&mut self, value: u8) {
-        let old = self.control_state.current_nt;
         self.control_state.current_nt = match value & 0x03 {
             0x00 => NametableArrangement::SingleScreenLo,
             0x01 => NametableArrangement::SingleScreenHi,
@@ -243,10 +242,6 @@ impl Mapper1 {
             0x03 => NametableArrangement::HorizontallyMirrored,
             _ => panic!("Invalid state: {}", value),
         };
-
-        if old != self.control_state.current_nt {
-            println!("MIRROR: {:?} -> {:?}", old, self.control_state.current_nt);
-        }
 
         self.control_state.prg_bank_mode = match (value >> 2) & 0x03 {
             0x00 | 0x01 => PrgBankMode::Switch32Kb,

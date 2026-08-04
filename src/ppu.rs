@@ -11,13 +11,19 @@ const NUM_DOTS: usize = 341;
 const BG_PALETTE_RAM: u16 = 0x3F00;
 const SPRITE_PALETTE_RAM: u16 = 0x3F10;
 
+enum NametableBank {
+    A,
+    B,
+}
+
 // Address space from 0x0000 --> 0xFFFF, but
 // with mirrors from 0x4000 onward.
 struct PpuMemory {
     // Determines how we map to chr rom (the first 0x2000 bytes).
     mapper: Rc<RefCell<dyn Mapper>>,
-    // 0x2000 --> 0x2FFF (with mirrors up to 0x3EFF)
-    name_tables: Segment<0x1000>,
+    // These banks are used to address the space between 0x2000 --> 0x2FFF (with mirrors up to 0x3EFF)
+    name_table_a: Segment<0x400>, // Also called the "lower" physical name table bank.
+    name_table_b: Segment<0x400>, // Also called the "upper" physical name table bank.
     // 0x3F00 --> 0x3F20 (with mirrors up to 0x4000)
     palettes: Segment<0x0040>,
     // 256 bytes of separately addressable memory to store 64 sprites of 4 bytes each.
@@ -116,58 +122,49 @@ impl PpuMemory {
      pub fn initialize(mapper: Rc<RefCell<dyn Mapper>>) -> Self {
         Self {
             mapper: mapper,
-            name_tables: Segment::<0x1000>::initialize(),
+            name_table_a: Segment::<0x400>::initialize(),
+            name_table_b: Segment::<0x400>::initialize(),
             palettes: Segment::<0x0040>::initialize(),
             oam_data: Segment::<0x0100>::initialize(),
         }
     }
 
-    fn get_mirrored_nametable_address(address: u16, arr: NametableArrangement) -> u16 {
-        let nametable: u16 = (address - 0x2000) % 0x1000;
-        let logical = nametable >> 10; // Two bits to signal which of the four nametables we're addressing.
-        let bank = match arr {
-            NametableArrangement::VerticallyMirrored   => logical & 0x01,        // A10 selects
-            NametableArrangement::HorizontallyMirrored => (logical >> 1) & 1,    // A11 selects
-            NametableArrangement::SingleScreenLo       => 0,
-            NametableArrangement::SingleScreenHi       => 1,
+    // Select the right name table to write to.
+    // We first map our address to the nametable region in PPU memory and mirror the addresses > 0x3000.
+    // Namely, mapped_address will land in:
+    //
+    // 0x2000_____________ 
+    // |    Nametable 0   |
+    // |                  |
+    // 0x2400______________
+    // |    Nametable 1   |
+    // |                  |
+    // 0x2800_____________|
+    // |    Nametable 2   |
+    // |                  |
+    // 0x2C00_____________|
+    // |    Nametable 3   |
+    // |                  |
+    // 0x3000_____________|
+    //
+    // Then depending on our mirroring mode, we map these regions to a specific physical bank (A or B until we
+    // have some increased mapper support).
+    // So for example: horizontal mirroring will map nt0,1 -> A and nt1,2 -> B. Vertical is nt0,nt2 -> A and nt1,nt2 -> B.
+    // Single screen lo and hi map all to A or B respectively.
+    fn select_name_table_bank(&self, address: u16) -> (NametableBank, usize) {
+        let nt_arrangement = self.mapper.borrow().get_nametable_arrangement();
+        let mapped_address = (address - 0x2000) % 0x1000;
+        let nt_index = mapped_address / 0x400; // Region index between 0 and 3.
+        let bank = match (nt_arrangement, nt_index) {
+            (NametableArrangement::SingleScreenLo, _) => NametableBank::A,
+            (NametableArrangement::SingleScreenHi, _) => NametableBank::B,
+            (NametableArrangement::HorizontallyMirrored, 0 | 1) => NametableBank::A,
+            (NametableArrangement::HorizontallyMirrored, 2 | 3) => NametableBank::B,
+            (NametableArrangement::VerticallyMirrored, 0 | 2) => NametableBank::A,
+            (NametableArrangement::VerticallyMirrored, 1 | 3) => NametableBank::B,
+            (nt, index) => panic!("Invalid state! {:?}, {}", nt, index), 
         };
-        (bank << 10) | (nametable & 0x03FF) // bank B is always 0x400, in every mode!
-    }
-
-    fn old_get_mirrored_nametable_address(address: u16, nt_arrangement: NametableArrangement) -> u16 {
-        let mut nametable_address = (address - 0x2000) % 0x1000;
-        match nt_arrangement {
-            // A: [0x2000, 0x23FF]
-            // A: [0x2400, 0x27FF] (mirrored)
-            // B: [0x2800, 0x2BFF]
-            // B: [0x2C00, 0x2FFF] (mirrored)
-            NametableArrangement::HorizontallyMirrored => {
-                nametable_address &= 0xFBFF; 
-            },
-            // A: [0x2000, 0x23FF]
-            // B: [0x2400, 0x27FF]
-            // A: [0x2800, 0x2BFF] (mirrored)
-            // B: [0x2C00, 0x2FFF] (mirrored)
-            NametableArrangement::VerticallyMirrored => {
-                nametable_address &= 0xF7FF; 
-            },
-            // A: [0x2000, 0x23FF]
-            // A: [0x2400, 0x27FF] (mirrored)
-            // A: [0x2800, 0x2BFF] (mirrored)
-            // A: [0x2C00, 0x2FFF] (mirrored)
-            NametableArrangement::SingleScreenLo => {
-                nametable_address &= 0xF3FF; 
-            },
-            // B: [0x2000, 0x23FF] (mirrored)
-            // B: [0x2400, 0x27FF]
-            // B: [0x2800, 0x2BFF] (mirrored)
-            // B: [0x2C00, 0x2FFF] (mirrored)
-            NametableArrangement::SingleScreenHi => {
-                nametable_address &= 0xF0FF;
-                nametable_address |= 0x0400; // Just set the fourth bit.
-            },
-        }
-        nametable_address
+        (bank, (mapped_address % 0x400) as usize)
     }
 
     pub fn write_byte(&mut self, address: u16, value: u8) {
@@ -179,11 +176,10 @@ impl PpuMemory {
         } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
             // Now we mirror according to our current arrangement.
-            let nametable_address = Self::get_mirrored_nametable_address(
-                address,
-                self.mapper.borrow().get_nametable_arrangement()
-            );
-            self.name_tables.write_byte(nametable_address as usize, value);
+            match self.select_name_table_bank(address) {
+                (NametableBank::A, bank_address) => self.name_table_a.write_byte(bank_address, value),
+                (NametableBank::B, bank_address) => self.name_table_b.write_byte(bank_address, value),
+            }
         } else {
             // Palette Memory
             let mut palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
@@ -209,11 +205,10 @@ impl PpuMemory {
         } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
             // Now we mirror according to our current arrangement.
-            let nametable_address = Self::get_mirrored_nametable_address(
-                address,
-                self.mapper.borrow().get_nametable_arrangement()
-            );
-            self.name_tables.read_byte(nametable_address as usize)
+            match self.select_name_table_bank(address) {
+                (NametableBank::A, bank_address) => self.name_table_a.read_byte(bank_address),
+                (NametableBank::B, bank_address) => self.name_table_b.read_byte(bank_address),
+            }
         } else {
             // Palette Memory
             let palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
