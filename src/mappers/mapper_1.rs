@@ -235,13 +235,19 @@ impl Mapper1 {
     // |                         3: fix last bank at $C000 and switch 16 KB bank at $8000)
     // +----- CHR-ROM bank mode (0: switch 8 KB at a time; 1: switch two separate 4 KB banks)
     fn write_control(&mut self, value: u8) {
+        let old = self.control_state.current_nt;
         self.control_state.current_nt = match value & 0x03 {
             0x00 => NametableArrangement::SingleScreenLo,
             0x01 => NametableArrangement::SingleScreenHi,
-            0x02 => NametableArrangement::HorizontallyMirrored,
-            0x03 => NametableArrangement::VerticallyMirrored,
+            0x02 => NametableArrangement::VerticallyMirrored,
+            0x03 => NametableArrangement::HorizontallyMirrored,
             _ => panic!("Invalid state: {}", value),
         };
+
+        if old != self.control_state.current_nt {
+            println!("MIRROR: {:?} -> {:?}", old, self.control_state.current_nt);
+        }
+
         self.control_state.prg_bank_mode = match (value >> 2) & 0x03 {
             0x00 | 0x01 => PrgBankMode::Switch32Kb,
             0x02 => PrgBankMode::FixFirstBank,
@@ -292,7 +298,7 @@ impl Mapper1 {
     //        1: PRG-RAM disabled
     fn write_prg_bank(&mut self, value: u8) {
         self.control_state.prg_bank = value & 0x0F;
-        if value >> 4 & 0x01 == 0x01 {
+        if value & 0x10 == 0x10 {
             panic!("Unimplemented write for PRG Bank");
         }
     }
@@ -304,7 +310,7 @@ impl Mapper1 {
     fn get_mapped_prg_address(&self, address: u16) -> usize {
         let mut offset_address = (address - 0x8000) as usize;
         let base_address = match self.control_state.prg_bank_mode {
-            PrgBankMode::Switch32Kb => ((self.control_state.prg_bank & 0x06) as usize) * 0x4000,
+            PrgBankMode::Switch32Kb => ((self.control_state.prg_bank & 0x0E) as usize) * 0x4000,
             PrgBankMode::FixFirstBank => {
                 if offset_address < 0x4000 {
                     // Use the first bank.
@@ -331,14 +337,14 @@ impl Mapper1 {
 
     // Assumed this address < 0x2000 (as it's CHR ROM), so we either write to chr_bank_0 or
     // chr_bank_1 based on the 4 or 8kb switching mode.
-    // For 8kb, the chr_bank_0 indexes into 4kb pages into our CHR ROM. but we ignore the lower
+    // For 8kb, the chr_bank_0 indexes into 8kb pages into our CHR ROM. but we ignore the lower
     // bit, so 00101 would translate to page 4 (not 5).
     // For 4 kb we either write to chr_bank_0 or chr_bank_1 depending on the address (if it's
     // < 0x1000 then we write to chr_bank_0 and chr_bank_1 otherwise).
     fn get_mapped_chr_address(&self, address: u16) -> usize {
         let mut offset_address = address as usize;
         let base_address = match self.control_state.chr_bank_mode {
-            ChrBankMode::Switch8Kb => ((self.control_state.chr_bank_0 & 0x06) as usize) * 0x1000,
+            ChrBankMode::Switch8Kb => ((self.control_state.chr_bank_0 & 0x0E) as usize) * 0x1000,
             ChrBankMode::Switch4Kb => {
                 if offset_address < 0x1000 {
                     (self.control_state.chr_bank_0 & 0x07) as usize * 0x1000
@@ -391,6 +397,10 @@ impl Mapper for Mapper1 {
 
         // If we shifted in 5 bits, it's time to reset the data register and do something with the
         // value. We do this based on the address we wrote to and the *zone* it corresponds to.
+        let data = self.control_state.data;
+        self.control_state.data = 0x00;
+        self.control_state.bit_count = 0;
+
         let register = if address < 0xA000 {
             Register::Control
         } else if address < 0xC000 {
@@ -402,21 +412,18 @@ impl Mapper for Mapper1 {
         };
 
         match register {
-            Register::Control => self.write_control(self.control_state.data),
-            Register::ChrBank0 => self.write_chr_bank_0(self.control_state.data),
-            Register::ChrBank1 => self.write_chr_bank_1(self.control_state.data),
-            Register::PrgBank => self.write_prg_bank(self.control_state.data),
+            Register::Control => self.write_control(data),
+            Register::ChrBank0 => self.write_chr_bank_0(data),
+            Register::ChrBank1 => self.write_chr_bank_1(data),
+            Register::PrgBank => self.write_prg_bank(data),
         }
-
-        self.control_state.data = 0x00;
-        self.control_state.bit_count = 0;
     }
 
     fn write_chr_rom_byte(&mut self, address: u16, value: u8) {
         self.chr_rom.write_byte(self.get_mapped_chr_address(address), value);
     }
 
-    fn write_prg_ram_byte(&mut self, address: u16, value: u8) {    
+    fn write_prg_ram_byte(&mut self, address: u16, value: u8) {
         let ram_address = (address - 0x6000) as usize;
         self.prg_ram.write_byte(ram_address, value);
     }
@@ -428,7 +435,6 @@ impl Mapper for Mapper1 {
 
 #[cfg(test)]
 mod tests {
-    use crate::mappers::mapper_2::Mapper2;
     use super::*;
 
     #[test]
@@ -444,7 +450,7 @@ mod tests {
         // control register.
         assert_eq!(mapper.control_state.chr_bank_mode, ChrBankMode::Switch4Kb);
         assert_eq!(mapper.control_state.prg_bank_mode, PrgBankMode::Switch32Kb);
-        assert_eq!(mapper.control_state.current_nt, NametableArrangement::HorizontallyMirrored);
+        assert_eq!(mapper.control_state.current_nt, NametableArrangement::VerticallyMirrored);
     }
 
     #[test]
@@ -500,6 +506,6 @@ mod tests {
         mapper.control_state.chr_bank_1 = 0xFF;
         // We have 8 4 kb banks, swap between them.
         assert_eq!(mapper.get_mapped_chr_address(0x0042), 20546);  //  0x5000 + 0x0042 (base=0x5000)
-        assert_eq!(mapper.get_mapped_chr_address(0x1042), 28738);  //  0x7000 + 0x0042 (base=0x5000)
+        assert_eq!(mapper.get_mapped_chr_address(0x1042), 28738);  //  0x7000 + 0x0042 (base=0x7000)
     }
 }
