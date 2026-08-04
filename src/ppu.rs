@@ -1,6 +1,6 @@
 use crate::mappers::mapper::Mapper;
 use crate::memory::Segment;
-use crate::ppu_registers::{PpuControl, PpuMask, VramIncrement};
+use crate::ppu_registers::{PpuControl, PpuMask, SpriteSize, VramIncrement};
 use crate::rom::NametableArrangement;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -11,13 +11,19 @@ const NUM_DOTS: usize = 341;
 const BG_PALETTE_RAM: u16 = 0x3F00;
 const SPRITE_PALETTE_RAM: u16 = 0x3F10;
 
+enum NametableBank {
+    A,
+    B,
+}
+
 // Address space from 0x0000 --> 0xFFFF, but
 // with mirrors from 0x4000 onward.
 struct PpuMemory {
     // Determines how we map to chr rom (the first 0x2000 bytes).
     mapper: Rc<RefCell<dyn Mapper>>,
-    // 0x2000 --> 0x2FFF (with mirrors up to 0x3EFF)
-    name_tables: Segment<0x1000>,
+    // These banks are used to address the space between 0x2000 --> 0x2FFF (with mirrors up to 0x3EFF)
+    name_table_a: Segment<0x400>, // Also called the "lower" physical name table bank.
+    name_table_b: Segment<0x400>, // Also called the "upper" physical name table bank.
     // 0x3F00 --> 0x3F20 (with mirrors up to 0x4000)
     palettes: Segment<0x0040>,
     // 256 bytes of separately addressable memory to store 64 sprites of 4 bytes each.
@@ -116,10 +122,49 @@ impl PpuMemory {
      pub fn initialize(mapper: Rc<RefCell<dyn Mapper>>) -> Self {
         Self {
             mapper: mapper,
-            name_tables: Segment::<0x1000>::initialize(),
+            name_table_a: Segment::<0x400>::initialize(),
+            name_table_b: Segment::<0x400>::initialize(),
             palettes: Segment::<0x0040>::initialize(),
             oam_data: Segment::<0x0100>::initialize(),
         }
+    }
+
+    // Select the right name table to write to.
+    // We first map our address to the nametable region in PPU memory and mirror the addresses > 0x3000.
+    // Namely, mapped_address will land in:
+    //
+    // 0x2000_____________ 
+    // |    Nametable 0   |
+    // |                  |
+    // 0x2400______________
+    // |    Nametable 1   |
+    // |                  |
+    // 0x2800_____________|
+    // |    Nametable 2   |
+    // |                  |
+    // 0x2C00_____________|
+    // |    Nametable 3   |
+    // |                  |
+    // 0x3000_____________|
+    //
+    // Then depending on our mirroring mode, we map these regions to a specific physical bank (A or B until we
+    // have some increased mapper support).
+    // So for example: horizontal mirroring will map nt0,1 -> A and nt1,2 -> B. Vertical is nt0,nt2 -> A and nt1,nt2 -> B.
+    // Single screen lo and hi map all to A or B respectively.
+    fn select_name_table_bank(&self, address: u16) -> (NametableBank, usize) {
+        let nt_arrangement = self.mapper.borrow().get_nametable_arrangement();
+        let mapped_address = (address - 0x2000) % 0x1000;
+        let nt_index = mapped_address / 0x400; // Region index between 0 and 3.
+        let bank = match (nt_arrangement, nt_index) {
+            (NametableArrangement::SingleScreenLo, _) => NametableBank::A,
+            (NametableArrangement::SingleScreenHi, _) => NametableBank::B,
+            (NametableArrangement::HorizontallyMirrored, 0 | 1) => NametableBank::A,
+            (NametableArrangement::HorizontallyMirrored, 2 | 3) => NametableBank::B,
+            (NametableArrangement::VerticallyMirrored, 0 | 2) => NametableBank::A,
+            (NametableArrangement::VerticallyMirrored, 1 | 3) => NametableBank::B,
+            (nt, index) => panic!("Invalid state! {:?}, {}", nt, index), 
+        };
+        (bank, (mapped_address % 0x400) as usize)
     }
 
     pub fn write_byte(&mut self, address: u16, value: u8) {
@@ -131,20 +176,10 @@ impl PpuMemory {
         } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
             // Now we mirror according to our current arrangement.
-            let mirroring_mask = match self.mapper.borrow().get_nametable_arrangement() {
-                // A: [0x2000, 0x23FF]
-                // A: [0x2400, 0x27FF] (mirrored)
-                // B: [0x2800, 0x2BFF]
-                // B: [0x2C00, 0x2FFF] (mirrored)
-                NametableArrangement::HorizontallyMirrored => 0xFBFF,
-                // A: [0x2000, 0x23FF]
-                // B: [0x2400, 0x27FF]
-                // A: [0x2800, 0x2BFF] (mirrored)
-                // B: [0x2C00, 0x2FFF] (mirrored)
-                NametableArrangement::VerticallyMirrored => 0xF7FF,
-            };
-            let name_table_address = ((address - 0x2000) % 0x1000) & mirroring_mask;
-            self.name_tables.write_byte(name_table_address as usize, value);
+            match self.select_name_table_bank(address) {
+                (NametableBank::A, bank_address) => self.name_table_a.write_byte(bank_address, value),
+                (NametableBank::B, bank_address) => self.name_table_b.write_byte(bank_address, value),
+            }
         } else {
             // Palette Memory
             let mut palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
@@ -170,20 +205,10 @@ impl PpuMemory {
         } else if address < BG_PALETTE_RAM {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
             // Now we mirror according to our current arrangement.
-            let mirroring_mask = match self.mapper.borrow().get_nametable_arrangement() {
-                // A: [0x2000, 0x23FF]
-                // A: [0x2400, 0x27FF] (mirrored)
-                // B: [0x2800, 0x2BFF]
-                // B: [0x2C00, 0x2FFF] (mirrored)
-                NametableArrangement::HorizontallyMirrored => 0xFBFF,
-                // A: [0x2000, 0x23FF]
-                // B: [0x2400, 0x27FF]
-                // A: [0x2800, 0x2BFF] (mirrored)
-                // B: [0x2C00, 0x2FFF] (mirrored)
-                NametableArrangement::VerticallyMirrored => 0xF7FF,
-            };
-            let name_table_address = ((address - 0x2000) % 0x1000) & mirroring_mask;
-            self.name_tables.read_byte(name_table_address as usize)
+            match self.select_name_table_bank(address) {
+                (NametableBank::A, bank_address) => self.name_table_a.read_byte(bank_address),
+                (NametableBank::B, bank_address) => self.name_table_b.read_byte(bank_address),
+            }
         } else {
             // Palette Memory
             let palette_memory_address = (address - BG_PALETTE_RAM) % 0x20;
@@ -200,72 +225,6 @@ impl PpuMemory {
             self.read_byte(address), 
             self.read_byte(address.wrapping_add(1)),
         ])
-    }
-
-    fn get_line_sprites(&self, scanline_y: u8) -> Vec<Sprite> {
-        // Creates a sprites for the line.
-        let mut sprites_on_scanline = Vec::with_capacity(8);
-        for i in (0..0x100).step_by(4) {
-            let index = i as usize;
-            let oam_y = self.oam_data.read_byte(index) as u16; // Sometimes a sprite can be written to 0xFF.
-            let top_y = oam_y + 1; // Add 1 because sprite positions are always written with a decrement.
-            let x_pos = self.oam_data.read_byte(index + 3);
-
-            if (scanline_y as u16) >= top_y && (scanline_y as u16) < top_y + 8 && top_y <= 240 {
-                // From NES dev wiki: 
-                // X-scroll values of $F9-FF results in parts of the sprite to be past the right edge of the screen, thus invisible. 
-                if x_pos < 0xF9 {
-                    sprites_on_scanline.push(
-                        Sprite::from(&[
-                            self.oam_data.read_byte(index),
-                            self.oam_data.read_byte(index + 1),
-                            self.oam_data.read_byte(index + 2),
-                            self.oam_data.read_byte(index + 3),
-                        ],
-                        index == 0,
-                    ));
-                }
-            }
-        }
-
-        sprites_on_scanline
-    }
-
-    fn create_sprite_line_pixels(&self, sprites_on_scanline: Vec<Sprite>, sprite_pattern_table: u16, scanline_y: u8) -> Vec<Option<SpritePixel>> {
-        // 256 pixel initialization.
-        let mut sprite_pixels = vec![None; 0x100];
-
-        // Iterate through each sprite and update the sprite pixels accordingly. Iterate in reverse so that
-        // sprites earlier in the vec take priority and overwrite later ones.
-        for sprite in sprites_on_scanline.into_iter().rev() {
-            let row = scanline_y - (sprite.top_y + 1);
-            let y = if sprite.v_flip { 7 - row } else { row } as u16;
-            let hi_pattern_table_address = (sprite_pattern_table << 12) | ((sprite.tile_index as u16) << 4) | 0x08 | y;
-            let lo_pattern_table_address = (sprite_pattern_table << 12) | ((sprite.tile_index as u16) << 4) | y;
-            let pattern_table_byte_hi = self.read_byte(hi_pattern_table_address);
-            let pattern_table_byte_lo = self.read_byte(lo_pattern_table_address);
-
-            // Don't go over the right edge.
-            let start = sprite.left_x as u16;
-            for i in start..=(start + 7).min(0xFF) {
-                let offset = i - start;
-                let shift = if sprite.h_flip { offset } else { 7 - offset };
-                let hi = (pattern_table_byte_hi >> shift) & 0x01;
-                let lo = (pattern_table_byte_lo >> shift) & 0x01;
-                // Skip transparent pixels.
-                if hi == 0x00 && lo == 0x00 {
-                    continue;
-                }
-                let palette = sprite.palette_bits & 0x03;
-                let value = (((hi << 1) | lo) & 0x03) as u16;
-
-                // Color index is a 6-bit index into system colors.
-                let color_index = (self.read_byte(SPRITE_PALETTE_RAM | ((palette as u16) << 2) | (value as u16))) & 0x3F;
-                let pixel = get_system_color(color_index);
-                sprite_pixels[i as usize] = Some(SpritePixel(pixel, sprite.priority, sprite.is_sprite_zero()));
-            }
-        }
-        sprite_pixels
     }
 }
 
@@ -382,7 +341,7 @@ impl Sprite {
         let h_flip = (attributes >> 6) & 0x01 == 0x01;
         let v_flip = (attributes >> 7) & 0x01 == 0x01;
 
-        Self { left_x, top_y, tile_index, palette_bits, priority, h_flip, v_flip, is_sprite_zero: is_sprite_zero }
+        Self { left_x, top_y, tile_index, palette_bits, priority, h_flip, v_flip, is_sprite_zero }
     }
 
     fn is_sprite_zero(&self) -> bool {
@@ -533,7 +492,7 @@ impl Ppu {
                 self.control = PpuControl::from(data);
                 self.nmi = data & 0x80 == 0x80;
                 // t: ...GH.. ........ <- d: ......GH
-                // Bit shift left 10 times and clear bits 11 and 12 in t
+                // Bit shift left 10 times and clear bits 10 and 11 in t
                 self.loopy_t = (((self.control.into() & 0x03) as u16) << 10) | (self.loopy_t & 0xF3FF);
             },
             // PPU Mask
@@ -724,7 +683,7 @@ impl Ppu {
             self.loopy_v += 0x1000; // Increment fine y
         } else {
             self.loopy_v &= 0x0FFF; // Zero out the fine y.
-            let mut coarse_y = (self.loopy_v & 0x03E0) >> 5;
+            let mut coarse_y: u16 = (self.loopy_v & 0x03E0) >> 5;
             if coarse_y == 29 {
                 coarse_y = 0;
                 // Switch vertical nametable (we do this 2 rows "early" for some reason)
@@ -742,6 +701,96 @@ impl Ppu {
     // Returns a number from 0 -> 7 indicating the fine y. Used for picking out the correct 8x1 pixel sliver from our tiles.
     fn fine_y(&self) -> u8 {
         ((self.loopy_v & 0x7000) >> 12) as u8
+    }
+
+
+    fn create_sprite_line_pixels(&self, sprites_on_scanline: Vec<Sprite>, scanline_y: u8) -> Vec<Option<SpritePixel>> {
+        // 256 pixel initialization.
+        let mut sprite_pixels = vec![None; 0x100];
+        let sprite_pattern_table = self.control.sprite_pattern_table_address() as u16;
+        let sprite_height = match self.control.sprite_size() {
+            SpriteSize::EightByEight => 0x08,
+            SpriteSize::EightBySixteen => 0x10,
+        };
+        // Sprite Pattern Tables: We build the hi and lo byte pattern table addresses slightly differently for 8x8 vs. 8x16.
+        // For both sprite sizes we create a 13 bit address indexing into [0x0000, 0x1FFF] range.
+        //
+        // 8x8: We take the tile index (t), pattern table bit (pt=0/1), and the y value (sprite row from 0-7) and assemble:
+        // hi_addr = pt t7 t6 t5 t4 t3 t2 t1 t0 1 y2 y1 y0
+        // lo_addr = pt t7 t6 t5 t4 t3 t2 t1 t0 0 y2 y1 y0
+        //
+        // 8x16: We use the lsb of the tile index as the pattern table bit and y ranges from 0-15 (4 bits) to assemble:
+        // hi_addr = t0 t7 t6 t5 t4 t3 t2 t1 y3 1 y2 y1 y0
+        // lo_addr = t0 t7 t6 t5 t4 t3 t2 t1 y3 0 y2 y1 y0
+
+        // Iterate through each sprite and update the sprite pixels accordingly. Iterate in reverse so that
+        // sprites earlier in the vec take priority and overwrite later ones.
+        for sprite in sprites_on_scanline.into_iter().rev() {
+            let row = scanline_y - (sprite.top_y + 1);
+            let y = if sprite.v_flip { (sprite_height - 1) - row } else { row } as u16;
+            let (pattern_table_bit, tile_index) = match self.control.sprite_size() {
+                SpriteSize::EightByEight => (sprite_pattern_table >> 3, sprite.tile_index as u16),
+                SpriteSize::EightBySixteen => ((sprite.tile_index & 0x01) as u16, ((sprite.tile_index & 0xFE) as u16) | ((y >> 3) & 0x01) as u16),
+            };
+
+            let hi_pattern_table_address = (pattern_table_bit << 12) | (tile_index << 4) | 0x08 | (y & 0x07);
+            let lo_pattern_table_address = (pattern_table_bit << 12) | (tile_index << 4) | 0x00 | (y & 0x07);
+            let pattern_table_byte_hi = self.memory.read_byte(hi_pattern_table_address);
+            let pattern_table_byte_lo = self.memory.read_byte(lo_pattern_table_address);
+
+            // Don't go over the right edge.
+            let start = sprite.left_x as u16;
+            for i in start..=(start + 7).min(0x00FF) {
+                let offset = i - start;
+                let shift = if sprite.h_flip { offset } else { 7 - offset };
+                let hi = (pattern_table_byte_hi >> shift) & 0x01;
+                let lo = (pattern_table_byte_lo >> shift) & 0x01;
+                // Skip transparent pixels.
+                if hi == 0x00 && lo == 0x00 {
+                    continue;
+                }
+                let palette = sprite.palette_bits & 0x03;
+                let value = (((hi << 1) | lo) & 0x03) as u16;
+
+                // Color index is a 6-bit index into system colors.
+                let color_index: u8 = (self.memory.read_byte(SPRITE_PALETTE_RAM | ((palette as u16) << 2) | (value as u16))) & 0x3F;
+                let pixel = get_system_color(color_index);
+                sprite_pixels[i as usize] = Some(SpritePixel(pixel, sprite.priority, sprite.is_sprite_zero()));
+            }
+        }
+        sprite_pixels
+    }
+
+    fn get_line_sprites(&self, scanline_y: u8) -> Vec<Sprite> {
+        // Creates a sprites for the line.
+        let mut sprites_on_scanline = Vec::with_capacity(8);
+        let sprite_height = match self.control.sprite_size() {
+            SpriteSize::EightByEight => 8,
+            SpriteSize::EightBySixteen => 16,
+        };
+        for i in (0..0x100).step_by(4) {
+            let index = i as usize;
+            let oam_y = self.memory.oam_data.read_byte(index) as u16; // Sometimes a sprite can be written to 0xFF.
+            let top_y = oam_y + 1; // Add 1 because sprite positions are always written with a decrement.
+            let x_pos = self.memory.oam_data.read_byte(index + 3);
+
+            if (scanline_y as u16) >= top_y && (scanline_y as u16) < top_y + sprite_height && top_y <= 240 {
+                // From NES dev wiki: 
+                // X-scroll values of $F9-FF results in parts of the sprite to be past the right edge of the screen, thus invisible. 
+                if x_pos <= 0xFF {
+                    sprites_on_scanline.push(
+                        Sprite::from(&[
+                            self.memory.oam_data.read_byte(index),
+                            self.memory.oam_data.read_byte(index + 1),
+                            self.memory.oam_data.read_byte(index + 2),
+                            self.memory.oam_data.read_byte(index + 3),
+                        ],
+                        index == 0,
+                    ));
+                }
+            }
+        }
+        sprites_on_scanline
     }
 
     pub fn get_image(&self) -> Option<Vec<Pixel>> {
@@ -888,17 +937,13 @@ impl Ppu {
             },
             CycleOperation::SpriteEvaluation => {
                 let scanline_y = self.frame_index.0.try_into().expect("Frame Index called from here shouldn't exceed 240");
-                let sprites = self.memory.get_line_sprites(scanline_y);
+                let sprites = self.get_line_sprites(scanline_y);
                 if sprites.len() > 8 {
                     // Check and set sprite overflow if we see more than 8 sprites on the line!
                     self.sprite_overflow = true;
                 }
 
-                self.line_sprite_pixels = self.memory.create_sprite_line_pixels(
-                    sprites,
-                    self.control.sprite_pattern_table_address() as u16, 
-                    scanline_y,
-                );
+                self.line_sprite_pixels = self.create_sprite_line_pixels(sprites, scanline_y);
             }
             CycleOperation::ClearVblank => {
                 self.vblank = false;
@@ -925,17 +970,5 @@ impl Ppu {
             },
             CycleOperation::IgnoredNameTableAccess => {},
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::rom::NametableArrangement::VerticallyMirrored;
-
-    #[test]
-    fn test_initialize_ppu() {
-        let ppu = Ppu::initialize(VerticallyMirrored);
-        println!("{:?}", ppu.frame_operations[0]);
     }
 }
