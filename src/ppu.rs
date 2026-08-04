@@ -122,8 +122,20 @@ impl PpuMemory {
         }
     }
 
-    fn get_mirrored_nametable_address(address: u16, nt_arrangement: NametableArrangement) -> u16 {
-        let mut nametable_address = ((address - 0x2000) % 0x1000);
+    fn get_mirrored_nametable_address(address: u16, arr: NametableArrangement) -> u16 {
+        let nametable: u16 = (address - 0x2000) % 0x1000;
+        let logical = nametable >> 10; // Two bits to signal which of the four nametables we're addressing.
+        let bank = match arr {
+            NametableArrangement::VerticallyMirrored   => logical & 0x01,        // A10 selects
+            NametableArrangement::HorizontallyMirrored => (logical >> 1) & 1,    // A11 selects
+            NametableArrangement::SingleScreenLo       => 0,
+            NametableArrangement::SingleScreenHi       => 1,
+        };
+        (bank << 10) | (nametable & 0x03FF) // bank B is always 0x400, in every mode!
+    }
+
+    fn old_get_mirrored_nametable_address(address: u16, nt_arrangement: NametableArrangement) -> u16 {
+        let mut nametable_address = (address - 0x2000) % 0x1000;
         match nt_arrangement {
             // A: [0x2000, 0x23FF]
             // A: [0x2400, 0x27FF] (mirrored)
@@ -198,7 +210,7 @@ impl PpuMemory {
             // Name Tables (mirrors from 0x3000 -> 0x3F00)
             // Now we mirror according to our current arrangement.
             let nametable_address = Self::get_mirrored_nametable_address(
-                address, 
+                address,
                 self.mapper.borrow().get_nametable_arrangement()
             );
             self.name_tables.read_byte(nametable_address as usize)
@@ -485,7 +497,7 @@ impl Ppu {
                 self.control = PpuControl::from(data);
                 self.nmi = data & 0x80 == 0x80;
                 // t: ...GH.. ........ <- d: ......GH
-                // Bit shift left 10 times and clear bits 11 and 12 in t
+                // Bit shift left 10 times and clear bits 10 and 11 in t
                 self.loopy_t = (((self.control.into() & 0x03) as u16) << 10) | (self.loopy_t & 0xF3FF);
             },
             // PPU Mask
@@ -770,7 +782,7 @@ impl Ppu {
             if (scanline_y as u16) >= top_y && (scanline_y as u16) < top_y + sprite_height && top_y <= 240 {
                 // From NES dev wiki: 
                 // X-scroll values of $F9-FF results in parts of the sprite to be past the right edge of the screen, thus invisible. 
-                if x_pos < 0xF9 {
+                if x_pos <= 0xFF {
                     sprites_on_scanline.push(
                         Sprite::from(&[
                             self.memory.oam_data.read_byte(index),
